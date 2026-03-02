@@ -1,3 +1,5 @@
+
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,14 +8,17 @@ from psycopg2.extras import RealDictCursor
 from typing import List
 from config import NEON_URL
 
+
 app = FastAPI(title="Algo Scanner Cloud API")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 class IndustryRequest(BaseModel):
     industries: List[str]
