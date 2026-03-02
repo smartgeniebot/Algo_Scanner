@@ -53,7 +53,8 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
     return (
         <div style={{ fontFamily: 'Inter, sans-serif' }}>
             
-            <div style={{ position: 'sticky', top: '64px', backgroundColor: '#ffffff', zIndex: 100, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+            {/* NUCLEAR Z-INDEX ON HEADER */}
+            <div style={{ position: 'sticky', top: '64px', backgroundColor: '#ffffff', zIndex: 9999, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
                 <div>
                     <h2 style={{ fontSize: '22px', fontWeight: '900', color: '#0d47a1', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
                         ALL INDUSTRIES BREADTH
@@ -81,7 +82,8 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
                 </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px', padding: '20px 30px' }}>
+            {/* EXPLICIT LOW Z-INDEX ON THE TILES GRID */}
+            <div style={{ position: 'relative', zIndex: 1, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px', padding: '20px 30px' }}>
                 {displayData.map((item, idx) => {
                     const rsValue = Number(item.avg_rs) || 0;
                     const outperformingPct = Number(item.outperforming_pct) || 0; 
