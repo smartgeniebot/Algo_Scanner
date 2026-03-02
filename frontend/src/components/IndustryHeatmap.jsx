@@ -40,7 +40,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
                 ? prev.filter(i => i !== industryName) 
                 : [...prev, industryName]
         );
-    };
+    };  
 
     if (loading) return <div style={{ padding: '40px', textAlign: 'center', fontSize: '18px', fontWeight: 'bold', color: '#0d47a1' }}>Analyzing Industry Breadth Data...</div>;
 
@@ -52,8 +52,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
 
     return (
         <div style={{ fontFamily: 'Inter, sans-serif' }}>
-            
-            <div style={{ position: 'sticky', top: 0, backgroundColor: '#fcfcfc', zIndex: 10, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ position: 'sticky', top: '65px', backgroundColor: '#fcfcfc', zIndex: 100, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                     <h2 style={{ fontSize: '22px', fontWeight: '900', color: '#0d47a1', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
                         ALL INDUSTRIES BREADTH
