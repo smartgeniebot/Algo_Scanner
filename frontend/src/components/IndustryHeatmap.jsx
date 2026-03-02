@@ -31,7 +31,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
         const numTotal = Number(total) || 0;
         if (numTotal >= 10) return <span style={{ color: '#27ae60', fontWeight: 'bold' }}>🛡️ High Conviction</span>;
         if (numTotal >= 5) return <span style={{ color: '#f39c12', fontWeight: 'bold' }}>⚖️ Med Conviction</span>;
-        return <span style={{ color: '#c0392b', fontWeight: 'bold' }}>⚠️ Low Sample (&lt;5)</span>;
+        return <span style={{ color: '#c0392b', fontWeight: 'bold' }}>⚠️ Low Sample (<5)</span>;
     };
 
     const toggleSelection = (industryName) => {
@@ -40,7 +40,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
                 ? prev.filter(i => i !== industryName) 
                 : [...prev, industryName]
         );
-    };  
+    };
 
     if (loading) return <div style={{ padding: '40px', textAlign: 'center', fontSize: '18px', fontWeight: 'bold', color: '#0d47a1' }}>Analyzing Industry Breadth Data...</div>;
 
@@ -52,7 +52,9 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
 
     return (
         <div style={{ fontFamily: 'Inter, sans-serif' }}>
-            <div style={{ position: 'sticky', top: '65px', backgroundColor: '#fcfcfc', zIndex: 100, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            
+            {/* THIS IS THE FIXED STICKY HEADER BLOCK */}
+            <div style={{ position: 'sticky', top: '64px', backgroundColor: '#ffffff', zIndex: 100, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
                 <div>
                     <h2 style={{ fontSize: '22px', fontWeight: '900', color: '#0d47a1', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
                         ALL INDUSTRIES BREADTH
