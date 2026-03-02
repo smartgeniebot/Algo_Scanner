@@ -1,0 +1,40 @@
+name: Chart Hawks Hourly Pulse
+
+on:
+  schedule:
+    # Runs at Minute 30 past the hour, from 4 to 9 UTC (Mon-Fri)
+    # This equals 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM, 2:00 PM, and 3:00 PM IST.
+    - cron: '30 4-9 * * 1-5'
+  workflow_dispatch: # Allows you to click a button to test it manually
+
+jobs:
+  run-pulse:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🔐 Step 1 - Auto Login
+        env:
+          FYERS_ID: ${{ secrets.FYERS_ID }}
+          TOTP_KEY: ${{ secrets.TOTP_KEY }}
+          PIN: ${{ secrets.PIN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        run: python auth.py
+
+      - name: ⚡ Step 2 - Intraday Pulse
+        env:
+          NEON_URL: ${{ secrets.NEON_URL }}
+        run: python intraday_pulse.py  
