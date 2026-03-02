@@ -54,7 +54,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
         <div style={{ fontFamily: 'Inter, sans-serif' }}>
             
             {/* NUCLEAR Z-INDEX ON HEADER */}
-            <div style={{ position: 'sticky', top: '64px', backgroundColor: '#ffffff', zIndex: 9999, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+            <div style={{ position: 'sticky', top: 0, backgroundColor: '#ffffff', zIndex: 9999, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
                 <div>
                     <h2 style={{ fontSize: '22px', fontWeight: '900', color: '#0d47a1', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
                         ALL INDUSTRIES BREADTH
