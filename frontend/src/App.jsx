@@ -14,12 +14,12 @@ function App() {
   const [theme, setTheme] = useState('dark');
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/filters').then(res => res.json()).then(res => setHierarchy(res.data));
+    fetch('https://algo-scanner-lnck.onrender.com/api/filters').then(res => res.json()).then(res => setHierarchy(res.data));
   }, []);
 
   const handleScan = () => {
     setLoading(true);
-    fetch('http://127.0.0.1:8000/api/stocks', {
+    fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ industries: selectedIndustries })
@@ -30,7 +30,7 @@ function App() {
     setSelectedIndustries(industriesToScan);
     setActiveView('scanner');
     setLoading(true);
-    fetch('http://127.0.0.1:8000/api/stocks', {
+    fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ industries: industriesToScan })
@@ -80,7 +80,7 @@ function App() {
 
   // 🎨 UNIFIED SLATE PALETTE: Tickers, Main Text, and Muted Text all use #64748b
   const themes = {
-    light: {
+    light: {  
       bgApp: '#f1f5f9', bgPanel: '#ffffff', 
       textMain: '#64748b',      // 🏛️ Unified Slate
       textTicker: '#64748b',    // 🏛️ Unified Slate
