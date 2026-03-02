@@ -11,7 +11,7 @@ function App() {
   const [activeView, setActiveView] = useState('scanner'); 
   const [searchTerm, setSearchTerm] = useState('');
   
-  const [theme, setTheme] = useState('dark');
+  const [theme, setTheme] = useState('light');
 
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters').then(res => res.json()).then(res => setHierarchy(res.data));
