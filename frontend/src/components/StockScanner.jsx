@@ -9,7 +9,7 @@ const StockScanner = () => {
   useEffect(() => {
     // Note: If you eventually update this to filter by specific industries, 
     // this will need to be changed to a POST request.
-    fetch('http://127.0.0.1:8000/api/stocks', {
+    fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // Sending an empty array for now. Adjust if you have selected industries!

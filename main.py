@@ -151,5 +151,12 @@ async def get_industry_heatmap():
 
 if __name__ == "__main__":
     import uvicorn
-    print("☁️ Cloud API Live at http://127.0.0.1:8000")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    import os
+    
+    # This automatically picks the port Render wants, or uses 8000 on your laptop
+    port = int(os.environ.get("PORT", 8000))
+    
+    print(f"🚀 API Engine starting on port {port}...")
+    
+    # We use 0.0.0.0 so it can be seen by the outside world when live
+    uvicorn.run(app, host="0.0.0.0", port=port)

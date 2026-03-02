@@ -6,7 +6,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
     const [selected, setSelected] = useState([]);
 
     useEffect(() => {
-        fetch('http://127.0.0.1:8000/api/industry-heatmap')
+        fetch('https://algo-scanner-lnck.onrender.com/api/industry-heatmap')
             .then(res => res.json())
             .then(res => { 
                 setData(Array.isArray(res) ? res : []); 
