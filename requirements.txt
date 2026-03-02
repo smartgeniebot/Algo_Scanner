@@ -1,0 +1,7 @@
+pandas
+pandas_ta_classic
+fyers_apiv3
+psycopg2-binary
+tqdm
+pyotp
+requests

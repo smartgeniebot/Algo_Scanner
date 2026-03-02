@@ -1,0 +1,12 @@
+# Ignore React dependencies
+frontend/node_modules/
+node_modules/
+
+# Ignore Python caches and environments
+__pycache__/
+venv/
+env/
+
+# Ignore Secrets and Tokens
+access_token.txt
+.env
