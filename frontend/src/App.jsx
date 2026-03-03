@@ -227,7 +227,7 @@ function App() {
         </div>
       ) : activeView === 'heatmap' ? (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp }}>
-          <SectorHeatmap theme={theme} />
+          <SectorHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
         </div>
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp }}>
