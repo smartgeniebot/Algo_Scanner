@@ -13,17 +13,24 @@ function App() {
   
   const [theme, setTheme] = useState('light');
 
+  // 🛡️ BULLETPROOF SAFETY NET 1: Default to empty object if res.data is missing
   useEffect(() => {
-    fetch('https://algo-scanner-lnck.onrender.com/api/filters').then(res => res.json()).then(res => setHierarchy(res.data));
+    fetch('https://algo-scanner-lnck.onrender.com/api/filters')
+      .then(res => res.json())
+      .then(res => setHierarchy(res.data || {})) 
+      .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
   }, []);
 
+  // 🛡️ BULLETPROOF SAFETY NET 2: Default to empty array if res.data is missing
   const handleScan = () => {
     setLoading(true);
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ industries: selectedIndustries })
-    }).then(res => res.json()).then(res => { setStocks(res.data); setLoading(false); });
+    }).then(res => res.json())
+      .then(res => { setStocks(res.data || []); setLoading(false); })
+      .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
   };
 
   const triggerScanFromHeatmap = (industriesToScan) => {
@@ -34,7 +41,9 @@ function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ industries: industriesToScan })
-    }).then(res => res.json()).then(res => { setStocks(res.data); setLoading(false); });
+    }).then(res => res.json())
+      .then(res => { setStocks(res.data || []); setLoading(false); })
+      .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
   };
 
   const handleSelectAll = () => setSelectedIndustries(Object.values(hierarchy).flat());
@@ -78,16 +87,11 @@ function App() {
 
   const toggleSort = (key) => setSortConfig({ key, direction: sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc' });
 
-  // 🎨 UNIFIED SLATE PALETTE: Tickers, Main Text, and Muted Text all use #64748b
   const themes = {
     light: {  
       bgApp: '#f1f5f9', bgPanel: '#ffffff', 
-      textMain: '#64748b',      // 🏛️ Unified Slate
-      textTicker: '#64748b',    // 🏛️ Unified Slate
-      textMuted: '#64748b',     // 🏛️ Unified Slate
-      border: '#e2e8f0', 
-      hover: '#f8fafc', 
-      inputBg: '#ffffff',
+      textMain: '#64748b', textTicker: '#64748b', textMuted: '#64748b', 
+      border: '#e2e8f0', hover: '#f8fafc', inputBg: '#ffffff',
       btnPrimaryBg: '#2563eb', btnPrimaryText: '#ffffff',
       btnSuccessBg: '#dcfce7', btnSuccessText: '#15803d', btnSuccessBorder: '#bbf7d0',
       btnDangerBg: '#fee2e2', btnDangerText: '#b91c1c', btnDangerBorder: '#fecaca',
@@ -96,12 +100,8 @@ function App() {
     },
     dark: {
       bgApp: '#020617', bgPanel: '#0f172a', 
-      textMain: '#f8fafc',
-      textTicker: '#38bdf8',    
-      textMuted: '#cbd5e1',
-      border: '#1e293b', 
-      hover: '#1e293b', 
-      inputBg: '#020617',
+      textMain: '#f8fafc', textTicker: '#38bdf8', textMuted: '#cbd5e1',
+      border: '#1e293b', hover: '#1e293b', inputBg: '#020617',
       btnPrimaryBg: '#3b82f6', btnPrimaryText: '#ffffff',
       btnSuccessBg: 'rgba(34, 197, 94, 0.2)', btnSuccessText: '#4ade80', btnSuccessBorder: 'rgba(34, 197, 94, 0.4)',
       btnDangerBg: 'rgba(239, 68, 68, 0.2)', btnDangerText: '#f87171', btnDangerBorder: 'rgba(239, 68, 68, 0.4)',
@@ -143,7 +143,6 @@ function App() {
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
           
           <div style={{ width: '340px', minWidth: '340px', backgroundColor: t.bgPanel, borderRight: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', transition: 'all 0.3s' }}>
-            
             <div style={{ padding: '20px 15px', display: 'flex', flexDirection: 'column', gap: '12px', borderBottom: `1px solid ${t.border}` }}>
               <button onClick={handleScan} style={{ padding: '12px', backgroundColor: t.btnPrimaryBg, color: t.btnPrimaryText, border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', transition: 'opacity 0.2s' }} onMouseEnter={e => e.target.style.opacity = 0.9} onMouseLeave={e => e.target.style.opacity = 1}>Scan Active Crosses</button>
               <div style={{ display: 'flex', gap: '10px' }}>
@@ -178,15 +177,7 @@ function App() {
               <div style={{ fontWeight: '700', fontSize: '16px' }}>
                 Scan Results <span style={{ fontWeight: '500', color: t.textMuted, fontSize: '14px' }}>({sortedStocks.length})</span>
               </div>
-              <input
-                type="text"
-                placeholder="🔍 Search symbols, dates, industries..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '320px', outline: 'none', fontSize: '13px', backgroundColor: t.inputBg, color: t.textMain, transition: 'border 0.2s' }}
-                onFocus={(e) => e.target.style.borderColor = t.btnPrimaryBg}
-                onBlur={(e) => e.target.style.borderColor = t.border}
-              />
+              <input type="text" placeholder="🔍 Search symbols, dates, industries..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '320px', outline: 'none', fontSize: '13px', backgroundColor: t.inputBg, color: t.textMain, transition: 'border 0.2s' }} onFocus={(e) => e.target.style.borderColor = t.btnPrimaryBg} onBlur={(e) => e.target.style.borderColor = t.border} />
             </div>
 
             <div style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '700', fontSize: '13px', color: t.textMuted, backgroundColor: t.bgPanel, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '0.5px', position: 'sticky', top: 0, zIndex: 10 }}>
@@ -204,14 +195,10 @@ function App() {
                 sortedStocks.length === 0 ? <div style={{textAlign:'center', padding:'60px', fontSize:'15px', color: t.rsNegText}}>No records match your search query.</div> :
                 sortedStocks.map((s, idx) => (
                 <div key={idx} style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `1px solid ${t.border}`, fontSize: '14px', transition: 'background-color 0.2s', cursor: 'default' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = t.hover} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                  
                   <div style={{fontSize: '14px', fontWeight:'800', color: t.textTicker}}>{s.fyers_symbol.split(':')[1].replace('-EQ','')}</div>
-                  
-                  {/* RS SCORE: Kept colorful so it stands out */}
                   <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>
                     {s.rs_score !== null ? (s.rs_score > 0 ? `+${s.rs_score}` : s.rs_score) : "--"}
                   </div>
-                  
                   <div style={{color: t.textMuted, fontWeight: '600'}}>{formatDT(s.daily_cross_date)}</div>
                   <div style={{display:'flex', justifyContent:'center', gap:'6px', color: t.textMuted, fontWeight: '600'}}>
                     {s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m} /> {formatDT(s.first_15m_cross_time)}</> : "--"}
