@@ -52,7 +52,7 @@ function App() {
     setSearchTerm(''); 
   };
 
-  // --- UPDATED EXPORT CSV: Includes Sector before Industry ---
+  // --- EXPORT CSV: Sector added before Industry ---
   const handleExportCSV = () => {
     if (sortedStocks.length === 0) return;
 
@@ -140,7 +140,7 @@ function App() {
   };
   const t = themes[theme]; 
 
-  const gridRowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.5fr', width: '100%', alignItems: 'center', textAlign: 'center' };
+  const gridRowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center' };
   const headerSortStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
   const tabStyle = { padding: '6px 16px', borderRadius: '6px', border: 'none', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' }; 
   const isScanDisabled = selectedIndustries.length === 0;
@@ -238,8 +238,7 @@ function App() {
                       <div style={{display:'flex', justifyContent:'center', gap:'4px'}}>{s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m}/>{formatDT(s.first_15m_cross_time)}</> : "--"}</div>
                       <div style={{display:'flex', justifyContent:'center', gap:'4px'}}>{s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h}/>{formatDT(s.first_1h_cross_time)}</> : "--"}</div>
                       
-                      {/* TRUNCATED INDUSTRY/SECTOR COLUMN */}
-                      <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
                         <div style={{ fontSize: '13px', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.industry}>{s.industry}</div>
                         <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>in {mappedSector}</div>
                       </div>
@@ -250,9 +249,13 @@ function App() {
           </main>
         </div>
       ) : activeView === 'heatmap' ? (
-        <SectorHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
+          <SectorHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
+        </div>
       ) : (
-        <IndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
+          <IndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
+        </div>
       )}
     </div>
   );
