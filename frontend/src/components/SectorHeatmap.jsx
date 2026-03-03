@@ -4,7 +4,9 @@ const SectorHeatmap = ({ onScanNavigate }) => {
     const [data, setData] = useState([]);
     const [selectedSector, setSelectedSector] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [selected, setSelected] = useState([]);
+    
+    // SOURCE OF TRUTH: This array now ONLY ever holds exact Industry names. Never Sector names.
+    const [selected, setSelected] = useState([]); 
 
     useEffect(() => {
         fetch('https://algo-scanner-lnck.onrender.com/api/sector-heatmap')
@@ -38,62 +40,76 @@ const SectorHeatmap = ({ onScanNavigate }) => {
     // --- Navigation Handlers ---
     const handleDrillDown = (sectorItem) => {
         setSelectedSector(sectorItem);
-        
-        // DEEP THINKING FIX: Only auto-select if the macro sector box was checked!
-        if (selected.includes(sectorItem.sector) && sectorItem.industries) {
-            const industryNames = sectorItem.industries.map(ind => ind.industry);
-            
-            setSelected(prev => {
-                // Remove the macro sector name so it doesn't override individual unchecks inside
-                const withoutSector = prev.filter(name => name !== sectorItem.sector);
-                // Add all the individual industries
-                return [...new Set([...withoutSector, ...industryNames])];
-            });
-        }
+        // We no longer manually mutate selections here. The unified state handles it.
     };
 
     const handleBack = () => {
         setSelectedSector(null);
     };
 
-    const toggleSelection = (identifier) => {
-        setSelected(prev => 
-            prev.includes(identifier) 
-                ? prev.filter(i => i !== identifier) 
-                : [...prev, identifier]
-        );
+    // --- The Smart Toggle Engine ---
+    const toggleSelection = (item, isMacroView) => {
+        if (isMacroView) {
+            // User clicked a Sector. Find all its underlying industries.
+            const industryNames = item.industries ? item.industries.map(ind => ind.industry) : [];
+            const allSelected = industryNames.length > 0 && industryNames.every(name => selected.includes(name));
+
+            if (allSelected) {
+                // If all are currently checked, clicking the sector should UNCHECK all of them.
+                setSelected(prev => prev.filter(name => !industryNames.includes(name)));
+            } else {
+                // If none or only some are checked, clicking the sector CHECKS all of them.
+                setSelected(prev => [...new Set([...prev, ...industryNames])]);
+            }
+        } else {
+            // User clicked a specific Industry. Just toggle that one string.
+            const identifier = item.industry;
+            setSelected(prev => 
+                prev.includes(identifier) 
+                    ? prev.filter(i => i !== identifier) 
+                    : [...prev, identifier]
+            );
+        }
     };
 
     // --- Bulk Selection Actions ---
     const selectPerformers = () => {
-        const performers = displayData.filter(item => (Number(item.avg_rs) || 0) > 0).map(item => item.industry || item.sector);
-        setSelected(prev => [...new Set([...prev, ...performers])]);
+        const itemsToAdd = [];
+        displayData.forEach(item => {
+            if ((Number(item.avg_rs) || 0) > 0) {
+                if (!selectedSector && item.industries) {
+                    // Macro view: Add all underlying industries of this performing sector
+                    itemsToAdd.push(...item.industries.map(ind => ind.industry));
+                } else if (item.industry) {
+                    // Micro view: Add the performing industry
+                    itemsToAdd.push(item.industry);
+                }
+            }
+        });
+        setSelected(prev => [...new Set([...prev, ...itemsToAdd])]);
     };
 
     const selectUnderperformers = () => {
-        const underperformers = displayData.filter(item => (Number(item.avg_rs) || 0) < 0).map(item => item.industry || item.sector);
-        setSelected(prev => [...new Set([...prev, ...underperformers])]);
+        const itemsToAdd = [];
+        displayData.forEach(item => {
+            if ((Number(item.avg_rs) || 0) < 0) {
+                if (!selectedSector && item.industries) {
+                    itemsToAdd.push(...item.industries.map(ind => ind.industry));
+                } else if (item.industry) {
+                    itemsToAdd.push(item.industry);
+                }
+            }
+        });
+        setSelected(prev => [...new Set([...prev, ...itemsToAdd])]);
     };
 
     const clearAll = () => setSelected([]);
 
-    // --- The Smart Scan Engine ---
+    // --- The Scan Engine ---
     const executeScan = () => {
-        let finalIndustries = [];
-        
-        selected.forEach(selection => {
-            const sectorMatch = data.find(s => s.sector === selection);
-            if (sectorMatch && sectorMatch.industries) {
-                finalIndustries.push(...sectorMatch.industries.map(ind => ind.industry));
-            } else {
-                finalIndustries.push(selection);
-            }
-        });
-
-        const uniqueIndustries = [...new Set(finalIndustries)];
-
-        if (uniqueIndustries.length > 0 && onScanNavigate) {
-            onScanNavigate(uniqueIndustries);
+        // Because `selected` strictly holds Industry names now, we just pass it directly!
+        if (selected.length > 0 && onScanNavigate) {
+            onScanNavigate(selected);
         }
     };
 
@@ -109,6 +125,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
         return bRS - aRS;
     });
 
+    const isMacroView = !selectedSector;
     const gridLayout = '40px 2.5fr 1fr 1.5fr 1fr 1fr';
 
     return (
@@ -176,7 +193,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                 {/* Sub-Header Columns */}
                 <div style={{ display: 'grid', gridTemplateColumns: gridLayout, gap: '15px', padding: '12px 24px', borderTop: '1px solid #e2e8f0', borderBottom: '2px solid #e2e8f0', fontSize: '12px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', backgroundColor: '#f8fafc' }}>
                     <div style={{ textAlign: 'center' }}>✔</div>
-                    <div>{selectedSector ? 'Industry' : 'Macro Sector'}</div>
+                    <div>{isMacroView ? 'Macro Sector' : 'Industry'}</div>
                     <div style={{ textAlign: 'center' }}>Vs Nifty</div>
                     <div>Outperforming Stocks %</div>
                     <div style={{ textAlign: 'center' }}>Conviction</div>
@@ -189,24 +206,35 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                 {displayData.map((item, idx) => {
                     const rsValue = Number(item.avg_rs) || 0;
                     const outperformingPct = Number(item.outperforming_pct) || 0; 
-                    const identifier = item.industry || item.sector;
-                    const isSelected = selected.includes(identifier);
-                    
-                    const style = getScoreStyle(rsValue);
-                    const title = identifier || "Unknown"; 
+                    const title = item.industry || item.sector || "Unknown"; 
                     const rsPercent = (rsValue * 100).toFixed(1);
+
+                    // Dynamic Selection Calculation based on View
+                    let isSelected = false;
+                    let isPartiallySelected = false; // Optional visual flag if you want to know if *some* are checked
+
+                    if (isMacroView) {
+                        const industryNames = item.industries ? item.industries.map(ind => ind.industry) : [];
+                        if (industryNames.length > 0) {
+                            isSelected = industryNames.every(name => selected.includes(name));
+                            isPartiallySelected = !isSelected && industryNames.some(name => selected.includes(name));
+                        }
+                    } else {
+                        isSelected = selected.includes(item.industry);
+                    }
 
                     return (
                         <div 
                             key={idx} 
-                            onClick={() => toggleSelection(identifier)}
+                            onClick={() => toggleSelection(item, isMacroView)}
                             style={{ 
                                 display: 'grid', gridTemplateColumns: gridLayout, gap: '15px', padding: '14px 24px', 
                                 borderBottom: idx === displayData.length - 1 ? 'none' : '1px solid #f1f5f9', alignItems: 'center',
-                                backgroundColor: isSelected ? '#eff6ff' : '#ffffff', cursor: 'pointer', transition: 'background-color 0.15s ease',
+                                backgroundColor: isSelected ? '#eff6ff' : (isPartiallySelected ? '#f8fafc' : '#ffffff'), 
+                                cursor: 'pointer', transition: 'background-color 0.15s ease',
                             }}
                             onMouseEnter={(e) => { if(!isSelected) e.currentTarget.style.backgroundColor = '#f8fafc' }}
-                            onMouseLeave={(e) => { if(!isSelected) e.currentTarget.style.backgroundColor = '#ffffff' }}
+                            onMouseLeave={(e) => { if(!isSelected) e.currentTarget.style.backgroundColor = isPartiallySelected ? '#f8fafc' : '#ffffff' }}
                         >
                             <div style={{ textAlign: 'center' }}>
                                 <input 
@@ -218,7 +246,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-start' }}>
                                 <div style={{ fontWeight: '700', fontSize: '14px', color: '#0f172a' }}>{title}</div>
                                 
-                                {!selectedSector ? (
+                                {isMacroView ? (
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); handleDrillDown(item); }}
                                         style={{ backgroundColor: '#f1f5f9', color: '#3b82f6', border: '1px solid #e2e8f0', padding: '4px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '4px' }}
