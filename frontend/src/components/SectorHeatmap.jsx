@@ -4,7 +4,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
     const [data, setData] = useState([]);
     const [selectedSector, setSelectedSector] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [selected, setSelected] = useState([]);
+    const [selected, setSelected] = useState([]); // Holds both Sector names AND Industry names
 
     useEffect(() => {
         fetch('https://algo-scanner-lnck.onrender.com/api/sector-heatmap')
@@ -35,15 +35,13 @@ const SectorHeatmap = ({ onScanNavigate }) => {
         return <span style={{ color: '#dc2626', backgroundColor: '#fef2f2', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>⚠️ LOW</span>;
     };
 
-    // --- Navigation & Selection Handlers ---
+    // --- Navigation Handlers (Selections are NO LONGER cleared here) ---
     const handleDrillDown = (sectorItem) => {
         setSelectedSector(sectorItem);
-        setSelected([]); // Clear selections when changing views
     };
 
     const handleBack = () => {
         setSelectedSector(null);
-        setSelected([]); // Clear selections when going back
     };
 
     const toggleSelection = (identifier) => {
@@ -54,17 +52,43 @@ const SectorHeatmap = ({ onScanNavigate }) => {
         );
     };
 
+    // --- Bulk Selection Actions (Now appends instead of overwriting) ---
     const selectPerformers = () => {
         const performers = displayData.filter(item => (Number(item.avg_rs) || 0) > 0).map(item => item.industry || item.sector);
-        setSelected(performers);
+        setSelected(prev => [...new Set([...prev, ...performers])]);
     };
 
     const selectUnderperformers = () => {
         const underperformers = displayData.filter(item => (Number(item.avg_rs) || 0) < 0).map(item => item.industry || item.sector);
-        setSelected(underperformers);
+        setSelected(prev => [...new Set([...prev, ...underperformers])]);
     };
 
     const clearAll = () => setSelected([]);
+
+    // --- The Smart Scan Engine (Translates Sectors into Industries) ---
+    const executeScan = () => {
+        let finalIndustries = [];
+        
+        selected.forEach(selection => {
+            // Check if this selection is a Macro Sector
+            const sectorMatch = data.find(s => s.sector === selection);
+            
+            if (sectorMatch && sectorMatch.industries) {
+                // If it is a sector, extract all its underlying industries
+                finalIndustries.push(...sectorMatch.industries.map(ind => ind.industry));
+            } else {
+                // Otherwise, it's already an industry name
+                finalIndustries.push(selection);
+            }
+        });
+
+        // Remove duplicates just in case they selected a sector AND an industry inside it
+        const uniqueIndustries = [...new Set(finalIndustries)];
+
+        if (uniqueIndustries.length > 0 && onScanNavigate) {
+            onScanNavigate(uniqueIndustries);
+        }
+    };
 
     if (loading) return <div style={{ padding: '40px', textAlign: 'center', fontSize: '15px', fontWeight: '600', color: '#64748b' }}>Analyzing Sector Breadth Data...</div>;
 
@@ -126,8 +150,9 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                             <button onClick={clearAll} style={{ backgroundColor: '#ffffff', color: '#64748b', border: '1px solid #e2e8f0', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Clear All</button>
                         </div>
 
+                        {/* Updated to use the smart executeScan function */}
                         <button 
-                            onClick={() => selected.length > 0 && onScanNavigate && onScanNavigate(selected)}
+                            onClick={executeScan}
                             disabled={selected.length === 0}
                             style={{ 
                                 backgroundColor: selected.length > 0 ? '#2563eb' : '#e2e8f0', 
