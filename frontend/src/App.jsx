@@ -23,6 +23,7 @@ function App() {
 
   // 🛡️ BULLETPROOF SAFETY NET 2: Default to empty array if res.data is missing
   const handleScan = () => {
+    if (selectedIndustries.length === 0) return; // Prevent empty scans
     setLoading(true);
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
@@ -52,6 +53,43 @@ function App() {
     setSelectedIndustries([]);
     setStocks([]);
     setSearchTerm(''); 
+  };
+
+  // --- NEW EXPORT CSV FUNCTIONALITY ---
+  const handleExportCSV = () => {
+    if (sortedStocks.length === 0) return;
+
+    // Define columns
+    const headers = ["Ticker", "Industry", "RS Score", "Daily Cross Date", "1H Pullback Time", "15M Pullback Time"];
+    
+    // Map data to the columns
+    const csvRows = sortedStocks.map(stock => {
+      // Clean ticker symbol
+      const cleanSymbol = stock.fyers_symbol ? stock.fyers_symbol.split(':')[1].replace('-EQ','') : '--';
+      
+      return [
+        cleanSymbol,
+        `"${stock.industry || '--'}"`, // Quotes to prevent issues with commas in names
+        stock.rs_score !== null ? stock.rs_score : '--',
+        stock.daily_cross_date || '--',
+        stock.first_1h_cross_time || '--',
+        stock.first_15m_cross_time || '--'
+      ].join(',');
+    });
+
+    // Combine headers and rows
+    const csvString = [headers.join(','), ...csvRows].join('\n');
+    
+    // Trigger download
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `ChartHawks_Scan_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const formatDT = (dt) => {
@@ -115,6 +153,8 @@ function App() {
   const headerSortStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
   const tabStyle = { padding: '6px 16px', borderRadius: '6px', border: 'none', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' }; 
 
+  const isScanDisabled = selectedIndustries.length === 0;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden', fontFamily: 'Inter, sans-serif', backgroundColor: t.bgApp, color: t.textMain, transition: 'background-color 0.3s' }}>
       
@@ -144,7 +184,27 @@ function App() {
           
           <div style={{ width: '340px', minWidth: '340px', backgroundColor: t.bgPanel, borderRight: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', transition: 'all 0.3s' }}>
             <div style={{ padding: '20px 15px', display: 'flex', flexDirection: 'column', gap: '12px', borderBottom: `1px solid ${t.border}` }}>
-              <button onClick={handleScan} style={{ padding: '12px', backgroundColor: t.btnPrimaryBg, color: t.btnPrimaryText, border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', transition: 'opacity 0.2s' }} onMouseEnter={e => e.target.style.opacity = 0.9} onMouseLeave={e => e.target.style.opacity = 1}>Scan Active Crosses</button>
+              
+              {/* DYNAMIC SCAN BUTTON */}
+              <button 
+                onClick={handleScan} 
+                disabled={isScanDisabled}
+                style={{ 
+                  padding: '12px', 
+                  backgroundColor: isScanDisabled ? t.border : t.btnPrimaryBg, 
+                  color: isScanDisabled ? t.textMuted : t.btnPrimaryText, 
+                  border: 'none', 
+                  borderRadius: '6px', 
+                  fontWeight: '700', 
+                  fontSize: '14px', 
+                  cursor: isScanDisabled ? 'not-allowed' : 'pointer', 
+                  transition: 'all 0.2s',
+                  boxShadow: isScanDisabled ? 'none' : '0 2px 4px rgba(37,99,235,0.2)'
+                }}
+              >
+                {isScanDisabled ? "Select Industries to Scan" : `Scan Active Crosses (${selectedIndustries.length})`}
+              </button>
+
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button onClick={handleSelectAll} style={{ padding: '10px', backgroundColor: t.btnSuccessBg, color: t.btnSuccessText, border: `1px solid ${t.btnSuccessBorder}`, borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', flex: 1 }}>Select All</button>
                 <button onClick={handleClear} style={{ padding: '10px', backgroundColor: t.btnDangerBg, color: t.btnDangerText, border: `1px solid ${t.btnDangerBorder}`, borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', flex: 1 }}>Clear All</button>
@@ -159,7 +219,7 @@ function App() {
                       const inds = hierarchy[s];
                       const allSel = inds.every(i => selectedIndustries.includes(i));
                       setSelectedIndustries(prev => allSel ? prev.filter(i => !inds.includes(i)) : [...new Set([...prev, ...inds])]);
-                    }} checked={hierarchy[s].every(i => selectedIndustries.includes(i))} /> {s}
+                    }} checked={hierarchy[s] && hierarchy[s].length > 0 && hierarchy[s].every(i => selectedIndustries.includes(i))} /> {s}
                   </label>
                   {hierarchy[s].map(i => (
                     <label key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '24px', marginTop: '6px', fontSize: '13px', color: t.textMuted, cursor: 'pointer' }}>
@@ -174,8 +234,20 @@ function App() {
           <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', width: 'calc(100vw - 340px)', backgroundColor: t.bgPanel, margin: '15px', borderRadius: '10px', border: `1px solid ${t.border}`, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', transition: 'all 0.3s' }}>
             
             <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.border}`, backgroundColor: t.bgApp, position: 'relative', zIndex: 20 }}>
-              <div style={{ fontWeight: '700', fontSize: '16px' }}>
-                Scan Results <span style={{ fontWeight: '500', color: t.textMuted, fontSize: '14px' }}>({sortedStocks.length})</span>
+              <div style={{ fontWeight: '700', fontSize: '16px', display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <div>Scan Results <span style={{ fontWeight: '500', color: t.textMuted, fontSize: '14px' }}>({sortedStocks.length})</span></div>
+                
+                {/* EXPORT TO EXCEL BUTTON */}
+                {sortedStocks.length > 0 && (
+                  <button 
+                    onClick={handleExportCSV}
+                    style={{ padding: '4px 12px', backgroundColor: '#10b981', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s', boxShadow: '0 1px 2px rgba(16,185,129,0.3)' }}
+                    onMouseEnter={e => e.target.style.backgroundColor = '#059669'}
+                    onMouseLeave={e => e.target.style.backgroundColor = '#10b981'}
+                  >
+                    📥 Export CSV
+                  </button>
+                )}
               </div>
               <input type="text" placeholder="🔍 Search symbols, dates, industries..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '320px', outline: 'none', fontSize: '13px', backgroundColor: t.inputBg, color: t.textMain, transition: 'border 0.2s' }} onFocus={(e) => e.target.style.borderColor = t.btnPrimaryBg} onBlur={(e) => e.target.style.borderColor = t.border} />
             </div>
@@ -193,22 +265,35 @@ function App() {
               {loading ? <div style={{textAlign:'center', padding:'60px', fontSize:'15px', color: t.textMuted}}>Analyzing the Vault...</div> : 
                 stocks.length === 0 ? <div style={{textAlign:'center', padding:'60px', fontSize:'15px', color: t.textMuted}}>Select industries from the sidebar and click Scan.</div> :
                 sortedStocks.length === 0 ? <div style={{textAlign:'center', padding:'60px', fontSize:'15px', color: t.rsNegText}}>No records match your search query.</div> :
-                sortedStocks.map((s, idx) => (
-                <div key={idx} style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `1px solid ${t.border}`, fontSize: '14px', transition: 'background-color 0.2s', cursor: 'default' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = t.hover} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                  <div style={{fontSize: '14px', fontWeight:'800', color: t.textTicker}}>{s.fyers_symbol.split(':')[1].replace('-EQ','')}</div>
-                  <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>
-                    {s.rs_score !== null ? (s.rs_score > 0 ? `+${s.rs_score}` : s.rs_score) : "--"}
-                  </div>
-                  <div style={{color: t.textMuted, fontWeight: '600'}}>{formatDT(s.daily_cross_date)}</div>
-                  <div style={{display:'flex', justifyContent:'center', gap:'6px', color: t.textMuted, fontWeight: '600'}}>
-                    {s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m} /> {formatDT(s.first_15m_cross_time)}</> : "--"}
-                  </div>
-                  <div style={{display:'flex', justifyContent:'center', gap:'6px', color: t.textMuted, fontWeight: '600'}}>
-                    {s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h} /> {formatDT(s.first_1h_cross_time)}</> : "--"}
-                  </div>
-                  <div style={{ fontSize: '13px', fontWeight:'600', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 15px' }} title={s.industry}>{s.industry}</div>
-                </div>
-              ))}
+                sortedStocks.map((s, idx) => {
+                  
+                  // Map the sector so it can be viewed on UI
+                  const mappedSector = Object.keys(hierarchy).find(sector => 
+                    hierarchy[sector].includes(s.industry)
+                  ) || '--';
+
+                  return (
+                    <div key={idx} style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `1px solid ${t.border}`, fontSize: '14px', transition: 'background-color 0.2s', cursor: 'default' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = t.hover} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                      <div style={{fontSize: '14px', fontWeight:'800', color: t.textTicker}}>{s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace('-EQ','') : '--'}</div>
+                      <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>
+                        {s.rs_score !== null ? (s.rs_score > 0 ? `+${s.rs_score}` : s.rs_score) : "--"}
+                      </div>
+                      <div style={{color: t.textMuted, fontWeight: '600'}}>{formatDT(s.daily_cross_date)}</div>
+                      <div style={{display:'flex', justifyContent:'center', gap:'6px', color: t.textMuted, fontWeight: '600'}}>
+                        {s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m} /> {formatDT(s.first_15m_cross_time)}</> : "--"}
+                      </div>
+                      <div style={{display:'flex', justifyContent:'center', gap:'6px', color: t.textMuted, fontWeight: '600'}}>
+                        {s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h} /> {formatDT(s.first_1h_cross_time)}</> : "--"}
+                      </div>
+                      
+                      {/* UI UPDATE: Display Industry and Sector combined */}
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                        <div style={{ fontSize: '13px', fontWeight:'700', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 15px', maxWidth: '100%' }} title={s.industry}>{s.industry}</div>
+                        <div style={{ fontSize: '10px', fontWeight: '600', color: t.textMuted, textTransform: 'uppercase', marginTop: '2px' }}>in {mappedSector}</div>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           </main>
         </div>
