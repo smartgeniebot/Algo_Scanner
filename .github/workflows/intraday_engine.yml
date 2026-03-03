@@ -2,9 +2,9 @@ name: Chart Hawks Hourly Pulse
 
 on:
   schedule:
-    # Runs at Minute 30 past the hour, from 4 to 9 UTC (Mon-Fri)
-    # This equals 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM, 2:00 PM, and 3:00 PM IST.
-    - cron: '30 4-9 * * 1-5'
+    # Runs at Minute 30 past the hour, from 2 to 10 UTC (Mon-Fri)
+    # This equals 8:00 AM, 9:00 AM, 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM, 2:00 PM, 3:00 PM, and 4:00 PM IST.
+    - cron: '30 2-10 * * 1-5'
   workflow_dispatch: # Allows you to click a button to test it manually
 
 jobs:
@@ -37,4 +37,4 @@ jobs:
       - name: ⚡ Step 2 - Intraday Pulse
         env:
           NEON_URL: ${{ secrets.NEON_URL }}
-        run: python intraday_pulse.py  
+        run: python intraday_pulse.py
