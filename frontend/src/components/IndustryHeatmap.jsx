@@ -19,19 +19,20 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
             });
     }, []);
 
-    const getCardStyle = (rs) => {
+    // Pro-grade compact score styling
+    const getScoreStyle = (rs) => {
         const numRs = Number(rs) || 0;
-        if (numRs >= 0.05) return { bg: '#e8f8f5', border: '#2ecc71', text: '#27ae60', bar: '#2ecc71' }; 
-        if (numRs > 0) return { bg: '#f4fcf7', border: '#82e0aa', text: '#2ecc71', bar: '#82e0aa' }; 
-        if (numRs > -0.05) return { bg: '#fdedec', border: '#e74c3c', text: '#c0392b', bar: '#e74c3c' }; 
-        return { bg: '#fadbd8', border: '#c0392b', text: '#922b21', bar: '#c0392b' }; 
+        if (numRs >= 0.05) return { text: '#059669', bg: '#ecfdf5', bar: '#10b981' }; 
+        if (numRs > 0) return { text: '#10b981', bg: '#f0fdf4', bar: '#34d399' }; 
+        if (numRs > -0.05) return { text: '#dc2626', bg: '#fef2f2', bar: '#ef4444' }; 
+        return { text: '#b91c1c', bg: '#fef2f2', bar: '#dc2626' }; 
     };
 
     const getConfidenceBadge = (total) => {
         const numTotal = Number(total) || 0;
-        if (numTotal >= 10) return <span style={{ color: '#27ae60', fontWeight: 'bold' }}>🛡️ High Conviction</span>;
-        if (numTotal >= 5) return <span style={{ color: '#f39c12', fontWeight: 'bold' }}>⚖️ Med Conviction</span>;
-        return <span style={{ color: '#c0392b', fontWeight: 'bold' }}>⚠️ Low Sample (&lt;5)</span>;
+        if (numTotal >= 10) return <span style={{ color: '#059669', backgroundColor: '#ecfdf5', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>🛡️ HIGH</span>;
+        if (numTotal >= 5) return <span style={{ color: '#d97706', backgroundColor: '#fffbeb', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>⚖️ MED</span>;
+        return <span style={{ color: '#dc2626', backgroundColor: '#fef2f2', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>⚠️ LOW (&lt;5)</span>;
     };
 
     const toggleSelection = (industryName) => {
@@ -42,7 +43,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
         );
     };
 
-    if (loading) return <div style={{ padding: '40px', textAlign: 'center', fontSize: '18px', fontWeight: 'bold', color: '#0d47a1' }}>Analyzing Industry Breadth Data...</div>;
+    if (loading) return <div style={{ padding: '40px', textAlign: 'center', fontSize: '15px', fontWeight: '600', color: '#64748b' }}>Analyzing Industry Breadth Data...</div>;
 
     const displayData = [...data].sort((a, b) => {
         const aRS = Number(a.avg_rs) || 0;
@@ -50,46 +51,49 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
         return bRS - aRS;
     });
 
+    // 6-column grid layout for the table
+    const gridLayout = '40px 2.5fr 1fr 1.5fr 1fr 1fr';
+
     return (
-        <div style={{ fontFamily: 'Inter, sans-serif' }}>
+        <div style={{ fontFamily: 'Inter, sans-serif', padding: '0 20px 20px 20px', maxWidth: '1200px', margin: '0 auto' }}>
             
-            {/* NUCLEAR Z-INDEX ON HEADER */}
-            <div style={{ position: 'sticky', top: 0, backgroundColor: '#ffffff', zIndex: 9999, padding: '20px 30px 15px 30px', borderBottom: '2px solid #e3f2fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+            {/* MAIN STICKY HEADER */}
+            <div style={{ position: 'sticky', top: 0, backgroundColor: '#ffffff', zIndex: 9999, padding: '20px 0 15px 0', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                    <h2 style={{ fontSize: '22px', fontWeight: '900', color: '#0d47a1', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        ALL INDUSTRIES BREADTH
-                    </h2>
-                    <div style={{ fontSize: '13px', color: '#555', marginTop: '5px', fontWeight: '600' }}>
-                        Select tiles to send directly to the scanner.
-                    </div>
+                    <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#0f172a', margin: 0 }}>ALL INDUSTRIES BREADTH</h2>
+                    <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px', fontWeight: '500' }}>Select rows to send directly to the scanner.</div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                     {selected.length > 0 && (
                         <button 
                             onClick={() => onScanNavigate(selected)}
-                            style={{ backgroundColor: '#0d47a1', color: '#fff', padding: '10px 20px', borderRadius: '6px', fontWeight: '900', border: 'none', cursor: 'pointer', fontSize: '15px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}
+                            style={{ backgroundColor: '#2563eb', color: '#fff', padding: '8px 16px', borderRadius: '6px', fontWeight: '700', border: 'none', cursor: 'pointer', fontSize: '14px', transition: 'all 0.2s', boxShadow: '0 2px 4px rgba(37,99,235,0.2)' }}
                         >
                             🚀 SCAN SELECTED ({selected.length})
                         </button>
                     )}
-
-                    <div style={{ display: 'flex', gap: '15px', fontSize: '12px', backgroundColor: '#f8f9fa', padding: '8px 15px', borderRadius: '6px', border: '1px solid #ddd' }}>
-                        {getConfidenceBadge(15)}
-                        {getConfidenceBadge(7)}
-                        {getConfidenceBadge(2)}
-                    </div>
                 </div>
             </div>
 
-            {/* EXPLICIT LOW Z-INDEX ON THE TILES GRID */}
-            <div style={{ position: 'relative', zIndex: 1, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px', padding: '20px 30px' }}>
+            {/* TABLE COLUMN HEADERS - STICKS JUST BELOW MAIN HEADER */}
+            <div style={{ display: 'grid', gridTemplateColumns: gridLayout, gap: '15px', padding: '12px 16px', borderBottom: '2px solid #e2e8f0', fontSize: '12px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', position: 'sticky', top: '75px', backgroundColor: '#f8fafc', zIndex: 9998, borderRadius: '8px 8px 0 0', marginTop: '20px' }}>
+                <div style={{ textAlign: 'center' }}>✔</div>
+                <div>Industry & Sector</div>
+                <div style={{ textAlign: 'center' }}>Vs NIFTY</div>
+                <div>Outperforming</div>
+                <div style={{ textAlign: 'center' }}>Conviction</div>
+                <div style={{ textAlign: 'right' }}>EMA Crosses</div>
+            </div>
+
+            {/* TABLE BODY ROWS */}
+            <div style={{ display: 'flex', flexDirection: 'column', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 8px 8px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                 {displayData.map((item, idx) => {
                     const rsValue = Number(item.avg_rs) || 0;
                     const outperformingPct = Number(item.outperforming_pct) || 0; 
                     const isSelected = selected.includes(item.industry);
                     
-                    const style = getCardStyle(rsValue);
+                    const style = getScoreStyle(rsValue);
                     const title = item.industry || "Unknown"; 
                     const rsPercent = (rsValue * 100).toFixed(1);
 
@@ -98,52 +102,55 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
                             key={idx} 
                             onClick={() => toggleSelection(item.industry)}
                             style={{ 
-                                backgroundColor: style.bg, 
-                                border: isSelected ? '4px solid #0d47a1' : `2px solid ${style.border}`, 
-                                padding: '18px', 
-                                borderRadius: '10px', 
-                                boxShadow: isSelected ? '0 4px 12px rgba(13, 71, 161, 0.3)' : '0 4px 6px rgba(0,0,0,0.02)',
+                                display: 'grid', 
+                                gridTemplateColumns: gridLayout, 
+                                gap: '15px', 
+                                padding: '14px 16px', 
+                                borderBottom: idx === displayData.length - 1 ? 'none' : '1px solid #f1f5f9',
+                                alignItems: 'center',
+                                backgroundColor: isSelected ? '#eff6ff' : '#ffffff',
                                 cursor: 'pointer',
-                                transition: 'all 0.1s',
-                                display: 'flex', flexDirection: 'column', gap: '12px'
+                                transition: 'background-color 0.15s ease',
                             }}
+                            onMouseEnter={(e) => { if(!isSelected) e.currentTarget.style.backgroundColor = '#f8fafc' }}
+                            onMouseLeave={(e) => { if(!isSelected) e.currentTarget.style.backgroundColor = '#ffffff' }}
                         >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <div style={{ width: '65%', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={isSelected} 
-                                        readOnly 
-                                        style={{ transform: 'scale(1.4)', marginTop: '4px', cursor: 'pointer' }}
-                                    />
-                                    <div>
-                                        <div style={{ fontWeight: '900', fontSize: '17px', color: '#111', lineHeight: '1.2' }}>{title}</div>
-                                        <div style={{ fontSize: '11px', color: '#7f8c8d', fontWeight: '700', marginTop: '4px', textTransform: 'uppercase' }}>in {item.sector}</div>
-                                    </div>
-                                </div>
-                                
-                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', backgroundColor: '#fff', padding: '6px 10px', borderRadius: '6px', border: `1px solid ${style.border}`, minWidth: '70px' }}>
-                                    <span style={{ fontSize: '10px', fontWeight: '800', color: '#7f8c8d', marginBottom: '2px' }}>Vs NIFTY</span>
-                                    <span style={{ fontSize: '16px', fontWeight: '900', color: style.text }}>{rsValue > 0 ? `+${rsPercent}%` : `${rsPercent}%`}</span>
-                                </div>
+                            <div style={{ textAlign: 'center' }}>
+                                <input 
+                                    type="checkbox" 
+                                    checked={isSelected} 
+                                    readOnly 
+                                    style={{ transform: 'scale(1.2)', cursor: 'pointer', accentColor: '#2563eb' }}
+                                />
                             </div>
 
-                            <div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: '800', marginBottom: '4px', color: '#333', textTransform: 'uppercase' }}>
-                                    <span>Outperforming Stocks:</span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <div style={{ fontWeight: '700', fontSize: '14px', color: '#0f172a' }}>{title}</div>
+                                <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '600', textTransform: 'uppercase' }}>{item.sector}</div>
+                            </div>
+                            
+                            <div style={{ display: 'flex', justifyContent: 'center' }}>
+                                <span style={{ backgroundColor: style.bg, color: style.text, padding: '4px 10px', borderRadius: '6px', fontSize: '13px', fontWeight: '800' }}>
+                                    {rsValue > 0 ? `+${rsPercent}%` : `${rsPercent}%`}
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', justifyContent: 'center' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: '700', color: '#475569' }}>
                                     <span>{outperformingPct}%</span>
                                 </div>
-                                <div style={{ width: '100%', height: '10px', backgroundColor: '#ddd', borderRadius: '5px', overflow: 'hidden' }}>
-                                    <div style={{ width: `${outperformingPct}%`, height: '100%', backgroundColor: style.bar }}></div>
+                                <div style={{ width: '100%', height: '6px', backgroundColor: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
+                                    <div style={{ width: `${outperformingPct}%`, height: '100%', backgroundColor: style.bar, borderRadius: '3px' }}></div>
                                 </div>
                             </div>
 
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto', borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: '10px', fontSize: '13px' }}>
-                                <div>{getConfidenceBadge(item.total_stocks)}</div>
-                                <div style={{ textAlign: 'right', lineHeight: '1.2' }}>
-                                    <div style={{ fontWeight: '900', color: '#111', fontSize: '13px' }}><span style={{ color: style.text, fontSize: '15px' }}>{item.active_crosses || 0}</span> EMA Crosses</div>
-                                    <div style={{ fontWeight: '700', color: '#777', fontSize: '11px' }}>of {item.total_stocks || 0} Total Stocks</div>
-                                </div>
+                            <div style={{ display: 'flex', justifyContent: 'center' }}>
+                                {getConfidenceBadge(item.total_stocks)}
+                            </div>
+
+                            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <div style={{ fontWeight: '800', color: '#0f172a', fontSize: '13px' }}>{item.active_crosses || 0}</div>
+                                <div style={{ fontWeight: '600', color: '#64748b', fontSize: '11px' }}>of {item.total_stocks || 0}</div>
                             </div>
                         </div>
                     );
