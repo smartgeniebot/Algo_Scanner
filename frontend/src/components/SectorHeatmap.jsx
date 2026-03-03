@@ -4,15 +4,14 @@ const SectorHeatmap = ({ onScanNavigate }) => {
     const [data, setData] = useState([]);
     const [selectedSector, setSelectedSector] = useState(null);
     const [loading, setLoading] = useState(true);
-    
-    // SOURCE OF TRUTH: This array now ONLY ever holds exact Industry names. Never Sector names.
     const [selected, setSelected] = useState([]); 
 
     useEffect(() => {
         fetch('https://algo-scanner-lnck.onrender.com/api/sector-heatmap')
             .then(res => res.json())
             .then(res => { 
-                setData(Array.isArray(res) ? res : []); 
+                const validData = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+                setData(validData); 
                 setLoading(false); 
             })
             .catch(err => { 
@@ -37,33 +36,29 @@ const SectorHeatmap = ({ onScanNavigate }) => {
         return <span style={{ color: '#dc2626', backgroundColor: '#fef2f2', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>⚠️ LOW</span>;
     };
 
-    // --- Navigation Handlers ---
     const handleDrillDown = (sectorItem) => {
+        if (!sectorItem) return;
         setSelectedSector(sectorItem);
-        // We no longer manually mutate selections here. The unified state handles it.
     };
 
     const handleBack = () => {
         setSelectedSector(null);
     };
 
-    // --- The Smart Toggle Engine ---
     const toggleSelection = (item, isMacroView) => {
+        if (!item) return;
         if (isMacroView) {
-            // User clicked a Sector. Find all its underlying industries.
-            const industryNames = item.industries ? item.industries.map(ind => ind.industry) : [];
+            const industryNames = Array.isArray(item.industries) ? item.industries.map(ind => ind?.industry).filter(Boolean) : [];
             const allSelected = industryNames.length > 0 && industryNames.every(name => selected.includes(name));
 
             if (allSelected) {
-                // If all are currently checked, clicking the sector should UNCHECK all of them.
                 setSelected(prev => prev.filter(name => !industryNames.includes(name)));
             } else {
-                // If none or only some are checked, clicking the sector CHECKS all of them.
                 setSelected(prev => [...new Set([...prev, ...industryNames])]);
             }
         } else {
-            // User clicked a specific Industry. Just toggle that one string.
-            const identifier = item.industry;
+            const identifier = item?.industry;
+            if (!identifier) return;
             setSelected(prev => 
                 prev.includes(identifier) 
                     ? prev.filter(i => i !== identifier) 
@@ -72,16 +67,13 @@ const SectorHeatmap = ({ onScanNavigate }) => {
         }
     };
 
-    // --- Bulk Selection Actions ---
     const selectPerformers = () => {
         const itemsToAdd = [];
         displayData.forEach(item => {
-            if ((Number(item.avg_rs) || 0) > 0) {
-                if (!selectedSector && item.industries) {
-                    // Macro view: Add all underlying industries of this performing sector
-                    itemsToAdd.push(...item.industries.map(ind => ind.industry));
-                } else if (item.industry) {
-                    // Micro view: Add the performing industry
+            if ((Number(item?.avg_rs) || 0) > 0) {
+                if (!selectedSector && Array.isArray(item.industries)) {
+                    itemsToAdd.push(...item.industries.map(ind => ind?.industry).filter(Boolean));
+                } else if (item?.industry) {
                     itemsToAdd.push(item.industry);
                 }
             }
@@ -92,10 +84,10 @@ const SectorHeatmap = ({ onScanNavigate }) => {
     const selectUnderperformers = () => {
         const itemsToAdd = [];
         displayData.forEach(item => {
-            if ((Number(item.avg_rs) || 0) < 0) {
-                if (!selectedSector && item.industries) {
-                    itemsToAdd.push(...item.industries.map(ind => ind.industry));
-                } else if (item.industry) {
+            if ((Number(item?.avg_rs) || 0) < 0) {
+                if (!selectedSector && Array.isArray(item.industries)) {
+                    itemsToAdd.push(...item.industries.map(ind => ind?.industry).filter(Boolean));
+                } else if (item?.industry) {
                     itemsToAdd.push(item.industry);
                 }
             }
@@ -105,9 +97,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
 
     const clearAll = () => setSelected([]);
 
-    // --- The Scan Engine ---
     const executeScan = () => {
-        // Because `selected` strictly holds Industry names now, we just pass it directly!
         if (selected.length > 0 && onScanNavigate) {
             onScanNavigate(selected);
         }
@@ -115,13 +105,13 @@ const SectorHeatmap = ({ onScanNavigate }) => {
 
     if (loading) return <div style={{ padding: '40px', textAlign: 'center', fontSize: '15px', fontWeight: '600', color: '#64748b' }}>Analyzing Sector Breadth Data...</div>;
 
-    // --- Data Prep ---
-    const sectorData = selectedSector ? data.find(s => s.sector === selectedSector.sector) : null;
-    const rawDisplayData = (selectedSector && sectorData && sectorData.industries) ? sectorData.industries : data;
+    // 🛡️ Safe property extraction at the root level
+    const sectorData = selectedSector ? (Array.isArray(data) ? data : []).find(s => s?.sector === selectedSector?.sector) : null;
+    const rawDisplayData = (selectedSector && sectorData && Array.isArray(sectorData.industries)) ? sectorData.industries : data;
 
-    const displayData = [...(Array.isArray(rawDisplayData) ? rawDisplayData : [])].sort((a, b) => {
-        const aRS = Number(a.avg_rs) || 0;
-        const bRS = Number(b.avg_rs) || 0;
+    const displayData = (Array.isArray(rawDisplayData) ? rawDisplayData : []).filter(item => item !== null && typeof item === 'object').sort((a, b) => {
+        const aRS = Number(a?.avg_rs) || 0;
+        const bRS = Number(b?.avg_rs) || 0;
         return bRS - aRS;
     });
 
@@ -130,13 +120,8 @@ const SectorHeatmap = ({ onScanNavigate }) => {
 
     return (
         <div style={{ fontFamily: 'Inter, sans-serif', maxWidth: '1200px', margin: '0 auto', paddingBottom: '30px' }}>
-            
-            {/* UNIFIED STICKY HEADER */}
             <div style={{ position: 'sticky', top: 0, zIndex: 9999, backgroundColor: '#ffffff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)', borderRadius: '0 0 8px 8px' }}>
-                
                 <div style={{ padding: '20px 24px 15px 24px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                    
-                    {/* Top Row: Title & Legend */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <div>
                             <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -149,7 +134,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                                         >
                                             ← BACK
                                         </button>
-                                        {selectedSector.sector}
+                                        {selectedSector?.sector}
                                     </>
                                 ) : 'MACRO SECTOR BREADTH'}
                             </h2>
@@ -166,7 +151,6 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                         </div>
                     </div>
 
-                    {/* Bottom Row: Buttons */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <button onClick={selectPerformers} style={{ backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Select Performers</button>
@@ -190,7 +174,6 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                     </div>
                 </div>
 
-                {/* Sub-Header Columns */}
                 <div style={{ display: 'grid', gridTemplateColumns: gridLayout, gap: '15px', padding: '12px 24px', borderTop: '1px solid #e2e8f0', borderBottom: '2px solid #e2e8f0', fontSize: '12px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', backgroundColor: '#f8fafc' }}>
                     <div style={{ textAlign: 'center' }}>✔</div>
                     <div>{isMacroView ? 'Macro Sector' : 'Industry'}</div>
@@ -201,27 +184,28 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                 </div>
             </div>
 
-            {/* TABLE BODY ROWS */}
             <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 8px 8px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                 {displayData.map((item, idx) => {
-                    const rsValue = Number(item.avg_rs) || 0;
-                    const outperformingPct = Number(item.outperforming_pct) || 0; 
-                    const title = item.industry || item.sector || "Unknown"; 
-                    const rsPercent = (rsValue * 100).toFixed(1);
-
-                    // Dynamic Selection Calculation based on View
+                    const rsValue = Number(item?.avg_rs) || 0;
+                    const outperformingPct = Number(item?.outperforming_pct) || 0; 
+                    const identifier = item?.industry || item?.sector || "Unknown";
+                    
                     let isSelected = false;
-                    let isPartiallySelected = false; // Optional visual flag if you want to know if *some* are checked
+                    let isPartiallySelected = false; 
 
                     if (isMacroView) {
-                        const industryNames = item.industries ? item.industries.map(ind => ind.industry) : [];
+                        const industryNames = Array.isArray(item?.industries) ? item.industries.map(ind => ind?.industry).filter(Boolean) : [];
                         if (industryNames.length > 0) {
                             isSelected = industryNames.every(name => selected.includes(name));
                             isPartiallySelected = !isSelected && industryNames.some(name => selected.includes(name));
                         }
                     } else {
-                        isSelected = selected.includes(item.industry);
+                        isSelected = selected.includes(identifier);
                     }
+                    
+                    const style = getScoreStyle(rsValue);
+                    const title = String(identifier); 
+                    const rsPercent = (rsValue * 100).toFixed(1);
 
                     return (
                         <div 
@@ -237,10 +221,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                             onMouseLeave={(e) => { if(!isSelected) e.currentTarget.style.backgroundColor = isPartiallySelected ? '#f8fafc' : '#ffffff' }}
                         >
                             <div style={{ textAlign: 'center' }}>
-                                <input 
-                                    type="checkbox" checked={isSelected} readOnly 
-                                    style={{ transform: 'scale(1.2)', cursor: 'pointer', accentColor: '#2563eb' }}
-                                />
+                                <input type="checkbox" checked={isSelected} readOnly style={{ transform: 'scale(1.2)', cursor: 'pointer', accentColor: '#2563eb' }} />
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-start' }}>
@@ -256,7 +237,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                                         📂 View Industries
                                     </button>
                                 ) : (
-                                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '600', textTransform: 'uppercase' }}>in {item.sector}</div>
+                                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '600', textTransform: 'uppercase' }}>in {item?.sector || "Unknown"}</div>
                                 )}
                             </div>
                             
@@ -276,12 +257,12 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                             </div>
 
                             <div style={{ display: 'flex', justifyContent: 'center' }}>
-                                {getConfidenceBadge(item.total_stocks)}
+                                {getConfidenceBadge(item?.total_stocks)}
                             </div>
 
                             <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                                <div style={{ fontWeight: '800', color: '#0f172a', fontSize: '13px' }}>{item.active_crosses || 0}</div>
-                                <div style={{ fontWeight: '600', color: '#64748b', fontSize: '11px' }}>of {item.total_stocks || 0}</div>
+                                <div style={{ fontWeight: '800', color: '#0f172a', fontSize: '13px' }}>{item?.active_crosses || 0}</div>
+                                <div style={{ fontWeight: '600', color: '#64748b', fontSize: '11px' }}>of {item?.total_stocks || 0}</div>
                             </div>
                         </div>
                     );
