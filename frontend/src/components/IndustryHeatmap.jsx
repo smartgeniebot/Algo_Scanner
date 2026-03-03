@@ -42,7 +42,6 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
         );
     };
 
-    // --- Bulk Selection Actions ---
     const selectPerformers = () => {
         const performers = displayData.filter(item => (Number(item.avg_rs) || 0) > 0).map(item => item.industry);
         setSelected(performers);
@@ -66,74 +65,77 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
     const gridLayout = '40px 2.5fr 1fr 1.5fr 1fr 1fr';
 
     return (
-        <div style={{ fontFamily: 'Inter, sans-serif', padding: '0 20px 20px 20px', maxWidth: '1200px', margin: '0 auto' }}>
+        <div style={{ fontFamily: 'Inter, sans-serif', maxWidth: '1200px', margin: '0 auto', paddingBottom: '30px' }}>
             
-            {/* MAIN HEADER & CONTROLS */}
-            <div style={{ position: 'sticky', top: 0, backgroundColor: '#ffffff', zIndex: 9999, padding: '20px 0 15px 0', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {/* UNIFIED STICKY HEADER: Keeps both sections locked together so tiles cannot overlap */}
+            <div style={{ position: 'sticky', top: 0, zIndex: 9999, backgroundColor: '#ffffff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)', borderRadius: '0 0 8px 8px' }}>
                 
-                {/* Top Row: Title & Legend Explanation */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                        <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#0f172a', margin: 0 }}>ALL INDUSTRIES BREADTH</h2>
-                        <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px', fontWeight: '500' }}>Select rows to send directly to the scanner.</div>
-                    </div>
+                {/* Main Header & Controls (Now with 24px side padding for breathing room) */}
+                <div style={{ padding: '20px 24px 15px 24px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
                     
-                    {/* Explicit Legend Explanation */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px', backgroundColor: '#f8fafc', padding: '8px 12px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-                        <span style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>Conviction Legend:</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: '500' }}>
-                            {getConfidenceBadge(15)} ≥ 10 Stocks
+                    {/* Top Row: Title & Legend */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                            <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#0f172a', margin: 0 }}>ALL INDUSTRIES BREADTH</h2>
+                            <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px', fontWeight: '500' }}>Select rows to send directly to the scanner.</div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: '500' }}>
-                            {getConfidenceBadge(7)} 5-9 Stocks
+                        
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px', backgroundColor: '#f8fafc', padding: '8px 12px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                            <span style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>Conviction Legend:</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: '500' }}>
+                                {getConfidenceBadge(15)} ≥ 10 Stocks
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: '500' }}>
+                                {getConfidenceBadge(7)} 5-9 Stocks
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: '500' }}>
+                                {getConfidenceBadge(2)} &lt; 5 Stocks
+                            </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: '500' }}>
-                            {getConfidenceBadge(2)} &lt; 5 Stocks
+                    </div>
+
+                    {/* Bottom Row: Buttons */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={selectPerformers} style={{ backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Select Performers</button>
+                            <button onClick={selectUnderperformers} style={{ backgroundColor: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Select Underperformers</button>
+                            <button onClick={clearAll} style={{ backgroundColor: '#ffffff', color: '#64748b', border: '1px solid #e2e8f0', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Clear All</button>
                         </div>
+
+                        <button 
+                            onClick={() => selected.length > 0 && onScanNavigate(selected)}
+                            disabled={selected.length === 0}
+                            style={{ 
+                                backgroundColor: selected.length > 0 ? '#2563eb' : '#e2e8f0', 
+                                color: selected.length > 0 ? '#ffffff' : '#94a3b8', 
+                                padding: '10px 20px', 
+                                borderRadius: '6px', 
+                                fontWeight: '700', 
+                                border: 'none', 
+                                cursor: selected.length > 0 ? 'pointer' : 'not-allowed', 
+                                fontSize: '14px', 
+                                transition: 'all 0.2s',
+                                boxShadow: selected.length > 0 ? '0 2px 4px rgba(37,99,235,0.2)' : 'none'
+                            }}
+                        >
+                            🚀 SCAN SELECTED ({selected.length})
+                        </button>
                     </div>
                 </div>
 
-                {/* Bottom Row: Action Buttons & Scan */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                        <button onClick={selectPerformers} style={{ backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Select Performers</button>
-                        <button onClick={selectUnderperformers} style={{ backgroundColor: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Select Underperformers</button>
-                        <button onClick={clearAll} style={{ backgroundColor: '#ffffff', color: '#64748b', border: '1px solid #e2e8f0', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Clear All</button>
-                    </div>
-
-                    <button 
-                        onClick={() => selected.length > 0 && onScanNavigate(selected)}
-                        disabled={selected.length === 0}
-                        style={{ 
-                            backgroundColor: selected.length > 0 ? '#2563eb' : '#e2e8f0', 
-                            color: selected.length > 0 ? '#ffffff' : '#94a3b8', 
-                            padding: '10px 20px', 
-                            borderRadius: '6px', 
-                            fontWeight: '700', 
-                            border: 'none', 
-                            cursor: selected.length > 0 ? 'pointer' : 'not-allowed', 
-                            fontSize: '14px', 
-                            transition: 'all 0.2s',
-                            boxShadow: selected.length > 0 ? '0 2px 4px rgba(37,99,235,0.2)' : 'none'
-                        }}
-                    >
-                        🚀 SCAN SELECTED ({selected.length})
-                    </button>
+                {/* Sub-Header Columns (Bound inside the sticky container) */}
+                <div style={{ display: 'grid', gridTemplateColumns: gridLayout, gap: '15px', padding: '12px 24px', borderTop: '1px solid #e2e8f0', borderBottom: '2px solid #e2e8f0', fontSize: '12px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', backgroundColor: '#f8fafc' }}>
+                    <div style={{ textAlign: 'center' }}>✔</div>
+                    <div>Industry & Sector</div>
+                    <div style={{ textAlign: 'center' }}>Vs Nifty</div>
+                    <div>Outperforming Stocks %</div>
+                    <div style={{ textAlign: 'center' }}>Conviction</div>
+                    <div style={{ textAlign: 'center' }}>D EMA Cross</div> {/* Centered aligned */}
                 </div>
             </div>
 
-            {/* TABLE COLUMN HEADERS */}
-            <div style={{ display: 'grid', gridTemplateColumns: gridLayout, gap: '15px', padding: '12px 16px', borderBottom: '2px solid #e2e8f0', fontSize: '12px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', position: 'sticky', top: '145px', backgroundColor: '#f8fafc', zIndex: 9998, borderRadius: '8px 8px 0 0', marginTop: '10px' }}>
-                <div style={{ textAlign: 'center' }}>✔</div>
-                <div>Industry & Sector</div>
-                <div style={{ textAlign: 'center' }}>Vs Nifty</div>
-                <div>Outperforming Stocks %</div>
-                <div style={{ textAlign: 'center' }}>Conviction</div>
-                <div style={{ textAlign: 'right' }}>D EMA Cross</div>
-            </div>
-
-            {/* TABLE BODY (Reverted entirely to the version you approved) */}
-            <div style={{ display: 'flex', flexDirection: 'column', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 8px 8px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+            {/* TABLE BODY ROWS (Locked to the bottom layer) */}
+            <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 8px 8px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                 {displayData.map((item, idx) => {
                     const rsValue = Number(item.avg_rs) || 0;
                     const outperformingPct = Number(item.outperforming_pct) || 0; 
@@ -151,7 +153,7 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
                                 display: 'grid', 
                                 gridTemplateColumns: gridLayout, 
                                 gap: '15px', 
-                                padding: '14px 16px', 
+                                padding: '14px 24px', // Matches the new 24px header padding
                                 borderBottom: idx === displayData.length - 1 ? 'none' : '1px solid #f1f5f9',
                                 alignItems: 'center',
                                 backgroundColor: isSelected ? '#eff6ff' : '#ffffff',
@@ -194,7 +196,8 @@ const IndustryHeatmap = ({ onScanNavigate }) => {
                                 {getConfidenceBadge(item.total_stocks)}
                             </div>
 
-                            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            {/* Centered Aligned EMA Crosses */}
+                            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                                 <div style={{ fontWeight: '800', color: '#0f172a', fontSize: '13px' }}>{item.active_crosses || 0}</div>
                                 <div style={{ fontWeight: '600', color: '#64748b', fontSize: '11px' }}>of {item.total_stocks || 0}</div>
                             </div>
