@@ -4,7 +4,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
     const [data, setData] = useState([]);
     const [selectedSector, setSelectedSector] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [selected, setSelected] = useState([]); // Holds both Sector names AND Industry names
+    const [selected, setSelected] = useState([]);
 
     useEffect(() => {
         fetch('https://algo-scanner-lnck.onrender.com/api/sector-heatmap')
@@ -35,9 +35,21 @@ const SectorHeatmap = ({ onScanNavigate }) => {
         return <span style={{ color: '#dc2626', backgroundColor: '#fef2f2', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>⚠️ LOW</span>;
     };
 
-    // --- Navigation Handlers (Selections are NO LONGER cleared here) ---
+    // --- Navigation Handlers ---
     const handleDrillDown = (sectorItem) => {
         setSelectedSector(sectorItem);
+        
+        // DEEP THINKING FIX: Only auto-select if the macro sector box was checked!
+        if (selected.includes(sectorItem.sector) && sectorItem.industries) {
+            const industryNames = sectorItem.industries.map(ind => ind.industry);
+            
+            setSelected(prev => {
+                // Remove the macro sector name so it doesn't override individual unchecks inside
+                const withoutSector = prev.filter(name => name !== sectorItem.sector);
+                // Add all the individual industries
+                return [...new Set([...withoutSector, ...industryNames])];
+            });
+        }
     };
 
     const handleBack = () => {
@@ -52,7 +64,7 @@ const SectorHeatmap = ({ onScanNavigate }) => {
         );
     };
 
-    // --- Bulk Selection Actions (Now appends instead of overwriting) ---
+    // --- Bulk Selection Actions ---
     const selectPerformers = () => {
         const performers = displayData.filter(item => (Number(item.avg_rs) || 0) > 0).map(item => item.industry || item.sector);
         setSelected(prev => [...new Set([...prev, ...performers])]);
@@ -65,24 +77,19 @@ const SectorHeatmap = ({ onScanNavigate }) => {
 
     const clearAll = () => setSelected([]);
 
-    // --- The Smart Scan Engine (Translates Sectors into Industries) ---
+    // --- The Smart Scan Engine ---
     const executeScan = () => {
         let finalIndustries = [];
         
         selected.forEach(selection => {
-            // Check if this selection is a Macro Sector
             const sectorMatch = data.find(s => s.sector === selection);
-            
             if (sectorMatch && sectorMatch.industries) {
-                // If it is a sector, extract all its underlying industries
                 finalIndustries.push(...sectorMatch.industries.map(ind => ind.industry));
             } else {
-                // Otherwise, it's already an industry name
                 finalIndustries.push(selection);
             }
         });
 
-        // Remove duplicates just in case they selected a sector AND an industry inside it
         const uniqueIndustries = [...new Set(finalIndustries)];
 
         if (uniqueIndustries.length > 0 && onScanNavigate) {
@@ -150,7 +157,6 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                             <button onClick={clearAll} style={{ backgroundColor: '#ffffff', color: '#64748b', border: '1px solid #e2e8f0', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', transition: 'background-color 0.2s' }}>Clear All</button>
                         </div>
 
-                        {/* Updated to use the smart executeScan function */}
                         <button 
                             onClick={executeScan}
                             disabled={selected.length === 0}
@@ -212,7 +218,6 @@ const SectorHeatmap = ({ onScanNavigate }) => {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-start' }}>
                                 <div style={{ fontWeight: '700', fontSize: '14px', color: '#0f172a' }}>{title}</div>
                                 
-                                {/* Macro View gets the Drill Down Button, Micro View gets the subtitle */}
                                 {!selectedSector ? (
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); handleDrillDown(item); }}
