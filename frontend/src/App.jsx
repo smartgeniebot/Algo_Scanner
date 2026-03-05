@@ -104,12 +104,32 @@ function App() {
     );
   }, [stocks, searchTerm]);
 
+  // --- UPGRADED ROBUST SORTING ENGINE ---
   const sortedStocks = useMemo(() => {
     let items = [...filteredStocks]; 
     if (sortConfig.key) {
       items.sort((a, b) => {
-        const valA = a[sortConfig.key] ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-        const valB = b[sortConfig.key] ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+        let valA = a[sortConfig.key];
+        let valB = b[sortConfig.key];
+
+        // Identify if we are sorting a timestamp column
+        const isDateColumn = ['daily_cross_date', 'first_15m_cross_time', 'first_1h_cross_time'].includes(sortConfig.key);
+
+        if (isDateColumn) {
+          // Convert valid dates to epoch numbers for flawless mathematical sorting. Push "--" to the bottom.
+          valA = (valA && valA !== "--") ? new Date(valA).getTime() : (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+          valB = (valB && valB !== "--") ? new Date(valB).getTime() : (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+        } else {
+          // Handle standard numeric or text fields
+          valA = valA ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+          valB = valB ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+          
+          // Use natural alphabetical string comparison for Ticker and Industry
+          if (typeof valA === 'string' && typeof valB === 'string' && valA !== Infinity && valB !== Infinity) {
+              return sortConfig.direction === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+          }
+        }
+
         if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
         if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
@@ -223,7 +243,8 @@ function App() {
               <div onClick={() => toggleSort('daily_cross_date')} style={headerSortStyle}>Daily Cross ⇅</div>
               <div onClick={() => toggleSort('first_15m_cross_time')} style={headerSortStyle}>15m Pullback ⇅</div>
               <div onClick={() => toggleSort('first_1h_cross_time')} style={headerSortStyle}>1H Pullback ⇅</div>
-              <div>Industry & Sector</div>
+              {/* Added the click handler to Industry & Sector header */}
+              <div onClick={() => toggleSort('industry')} style={headerSortStyle}>Industry & Sector ⇅</div>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto' }}>
