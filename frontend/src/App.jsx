@@ -53,7 +53,7 @@ function App() {
     setSelectedIndustries([]);
     setStocks([]);
     setSearchTerm(''); 
-    setActiveChart(null); // Clear chart on clear
+    setActiveChart(null); 
   };
 
   const handleExportCSV = () => {
@@ -330,6 +330,7 @@ const PullbackIcon = ({ color }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16C10 14.5 14 13 20 11.5" stroke={color} strokeWidth="3" strokeLinecap="round" /><path d="M4 8C10 10 14 16 20 20" stroke={color} strokeOpacity="0.4" strokeWidth="3" strokeLinecap="round" /></svg>
 );
 
+// UPGRADED: Advanced Script Injection with Object Parameters
 const TVChart = ({ symbol, theme }) => {
   useEffect(() => {
     const containerId = 'tv_chart_container';
@@ -351,9 +352,11 @@ const TVChart = ({ symbol, theme }) => {
           hide_legend: false,
           save_image: false,
           container_id: containerId,
-          // FIX: Explicitly loading the bundled Ribbon indicator. 
+          // THE FIX: Directly injecting the MAs as Javascript objects with precise lengths!
           studies: [
-            "Moving Average Ribbon@tv-basicstudies"
+            { id: "EMA@tv-basicstudies", inputs: { length: 20 } },
+            { id: "EMA@tv-basicstudies", inputs: { length: 50 } },
+            { id: "MASimple@tv-basicstudies", inputs: { length: 200 } }
           ]
         });
       }
