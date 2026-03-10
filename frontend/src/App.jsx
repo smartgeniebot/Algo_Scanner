@@ -235,10 +235,8 @@ function App() {
               <input type="text" placeholder="🔍 Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '300px', backgroundColor: t.inputBg, color: t.textMain }} />
             </div>
 
-            {/* UPGRADED: Split View Architecture Container */}
             <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
               
-              {/* TOP HALF: Table List */}
               <div style={{ display: 'flex', flexDirection: 'column', flex: activeChart ? '0 0 50%' : '1 1 100%', overflow: 'hidden', transition: 'flex 0.3s ease' }}>
                 <div style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '14px', color: t.textMuted, backgroundColor: t.bgPanel, position: 'sticky', top: 0, zIndex: 10 }}>
                   <div onClick={() => toggleSort('fyers_symbol')} style={headerSortStyle}>Ticker ⇅</div>
@@ -260,7 +258,6 @@ function App() {
                       return (
                         <div 
                           key={idx} 
-                          // UPGRADED: The entire row is now clickable for rapid scanning
                           onClick={() => { if(cleanTicker) setActiveChart(bseSymbol); }}
                           style={{ 
                             ...gridRowStyle, 
@@ -294,7 +291,6 @@ function App() {
                 </div>
               </div>
 
-              {/* BOTTOM HALF: The Split Chart Engine */}
               {activeChart && (
                 <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
                   <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
@@ -309,7 +305,6 @@ function App() {
                     </button>
                   </div>
                   <div style={{ flex: 1, position: 'relative' }}>
-                    {/* Render the custom Script Injection Component */}
                     <TVChart symbol={activeChart} theme={theme} />
                   </div>
                 </div>
@@ -335,14 +330,11 @@ const PullbackIcon = ({ color }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16C10 14.5 14 13 20 11.5" stroke={color} strokeWidth="3" strokeLinecap="round" /><path d="M4 8C10 10 14 16 20 20" stroke={color} strokeOpacity="0.4" strokeWidth="3" strokeLinecap="round" /></svg>
 );
 
-// UPGRADED: Custom Advanced TradingView Component
-// This solves Issue 1 by using script injection to explicitly load studies (EMAs/SMAs) 
-// every time a new symbol is clicked, instead of relying on standard stateless iframes.
 const TVChart = ({ symbol, theme }) => {
   useEffect(() => {
     const containerId = 'tv_chart_container';
     const container = document.getElementById(containerId);
-    if (container) container.innerHTML = ''; // Clear previous chart data
+    if (container) container.innerHTML = ''; 
 
     const loadChart = () => {
       if (window.TradingView) {
@@ -359,17 +351,14 @@ const TVChart = ({ symbol, theme }) => {
           hide_legend: false,
           save_image: false,
           container_id: containerId,
-          // Injecting the EMAs and SMAs explicitly
+          // FIX: Explicitly loading the bundled Ribbon indicator. 
           studies: [
-            "EMA@tv-basicstudies",
-            "EMA@tv-basicstudies",
-            "MASimple@tv-basicstudies"
+            "Moving Average Ribbon@tv-basicstudies"
           ]
         });
       }
     };
 
-    // If script isn't loaded yet, append it. Otherwise, initialize directly.
     if (typeof window.TradingView === 'undefined') {
       const script = document.createElement('script');
       script.id = 'tv-js-script';
