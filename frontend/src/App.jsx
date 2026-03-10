@@ -12,7 +12,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [theme, setTheme] = useState('light');
   
-  // NEW: State to track which chart modal is currently open
+  // State to track which chart is open in the bottom split-pane
   const [activeChart, setActiveChart] = useState(null);
 
   useEffect(() => {
@@ -53,6 +53,7 @@ function App() {
     setSelectedIndustries([]);
     setStocks([]);
     setSearchTerm(''); 
+    setActiveChart(null); // Clear chart on clear
   };
 
   const handleExportCSV = () => {
@@ -234,56 +235,86 @@ function App() {
               <input type="text" placeholder="🔍 Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '300px', backgroundColor: t.inputBg, color: t.textMain }} />
             </div>
 
-            <div style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '14px', color: t.textMuted, backgroundColor: t.bgPanel, position: 'sticky', top: 0, zIndex: 10 }}>
-              <div onClick={() => toggleSort('fyers_symbol')} style={headerSortStyle}>Ticker ⇅</div>
-              <div onClick={() => toggleSort('rs_score')} style={headerSortStyle}>RS Score ⇅</div>
-              <div onClick={() => toggleSort('daily_cross_date')} style={headerSortStyle}>Daily Cross ⇅</div>
-              <div onClick={() => toggleSort('first_15m_cross_time')} style={headerSortStyle}>15m Pullback ⇅</div>
-              <div onClick={() => toggleSort('first_1h_cross_time')} style={headerSortStyle}>1H Pullback ⇅</div>
-              <div onClick={() => toggleSort('industry')} style={headerSortStyle}>Industry & Sector ⇅</div>
-            </div>
+            {/* UPGRADED: Split View Architecture Container */}
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+              
+              {/* TOP HALF: Table List */}
+              <div style={{ display: 'flex', flexDirection: 'column', flex: activeChart ? '0 0 50%' : '1 1 100%', overflow: 'hidden', transition: 'flex 0.3s ease' }}>
+                <div style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '14px', color: t.textMuted, backgroundColor: t.bgPanel, position: 'sticky', top: 0, zIndex: 10 }}>
+                  <div onClick={() => toggleSort('fyers_symbol')} style={headerSortStyle}>Ticker ⇅</div>
+                  <div onClick={() => toggleSort('rs_score')} style={headerSortStyle}>RS Score ⇅</div>
+                  <div onClick={() => toggleSort('daily_cross_date')} style={headerSortStyle}>Daily Cross ⇅</div>
+                  <div onClick={() => toggleSort('first_15m_cross_time')} style={headerSortStyle}>15m Pullback ⇅</div>
+                  <div onClick={() => toggleSort('first_1h_cross_time')} style={headerSortStyle}>1H Pullback ⇅</div>
+                  <div onClick={() => toggleSort('industry')} style={headerSortStyle}>Industry & Sector ⇅</div>
+                </div>
 
-            <div style={{ flex: 1, overflowY: 'auto' }}>
-              {loading ? <div style={{textAlign:'center', padding:'60px'}}>Scanning...</div> : 
-                sortedStocks.map((s, idx) => {
-                  const mappedSector = Object.keys(hierarchy).find(sector => hierarchy[sector].includes(s.industry)) || '--';
-                  return (
-                    <div key={idx} style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `1px solid ${t.border}`, fontSize: '14px' }}>
-                      
-                      {/* FIX: Converting symbol to BSE right inside the onClick handler to bypass NSE block */}
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                        <div style={{fontWeight:'800', color: t.textTicker}}>{s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace('-EQ','') : '--'}</div>
-                        {s.fyers_symbol && (
-                          <svg 
-                            onClick={() => {
-                              const cleanTicker = s.fyers_symbol.split(':')[1].replace('-EQ','');
-                              setActiveChart(`BSE:${cleanTicker}`);
-                            }}
-                            width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                            style={{ cursor: 'pointer', transition: 'stroke 0.2s' }}
-                            onMouseEnter={(e) => e.currentTarget.style.stroke = '#3b82f6'}
-                            onMouseLeave={(e) => e.currentTarget.style.stroke = t.textMuted}
-                            title="Open TradingView Chart"
-                          >
-                            <path d="M3 3v18h18" />
-                            <path d="m19 9-5 5-4-4-3 3" />
-                          </svg>
-                        )}
-                      </div>
+                <div style={{ flex: 1, overflowY: 'auto' }}>
+                  {loading ? <div style={{textAlign:'center', padding:'60px'}}>Scanning...</div> : 
+                    sortedStocks.map((s, idx) => {
+                      const mappedSector = Object.keys(hierarchy).find(sector => hierarchy[sector].includes(s.industry)) || '--';
+                      const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace('-EQ','') : '';
+                      const bseSymbol = `BSE:${cleanTicker}`;
+                      const isRowActive = activeChart === bseSymbol;
 
-                      <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? "--"}</div>
-                      
-                      <div style={{ color: t.textTicker, fontWeight: '700' }}>{formatDT(s.daily_cross_date)}</div>
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m}/>{formatDT(s.first_15m_cross_time)}</> : "--"}</div>
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h}/>{formatDT(s.first_1h_cross_time)}</> : "--"}</div>
-                      
-                      <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '13px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.industry}>{s.industry}</div>
-                        <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>in {mappedSector}</div>
-                      </div>
+                      return (
+                        <div 
+                          key={idx} 
+                          // UPGRADED: The entire row is now clickable for rapid scanning
+                          onClick={() => { if(cleanTicker) setActiveChart(bseSymbol); }}
+                          style={{ 
+                            ...gridRowStyle, 
+                            padding: '16px 0', 
+                            borderBottom: `1px solid ${t.border}`, 
+                            fontSize: '14px',
+                            cursor: 'pointer',
+                            backgroundColor: isRowActive ? (theme === 'dark' ? '#1e293b' : '#f1f5f9') : 'transparent',
+                            transition: 'background-color 0.15s ease'
+                          }}
+                          onMouseEnter={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = t.hover }}
+                          onMouseLeave={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = 'transparent' }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                            <div style={{fontWeight:'800', color: isRowActive ? '#3b82f6' : t.textTicker}}>{cleanTicker || '--'}</div>
+                          </div>
+
+                          <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? "--"}</div>
+                          
+                          <div style={{ color: t.textTicker, fontWeight: '700' }}>{formatDT(s.daily_cross_date)}</div>
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m}/>{formatDT(s.first_15m_cross_time)}</> : "--"}</div>
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h}/>{formatDT(s.first_1h_cross_time)}</> : "--"}</div>
+                          
+                          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '13px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.industry}>{s.industry}</div>
+                            <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>in {mappedSector}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {/* BOTTOM HALF: The Split Chart Engine */}
+              {activeChart && (
+                <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
+                  <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
+                    <div style={{ fontWeight: '800', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                      📊 {activeChart.replace('BSE:', '')}
                     </div>
-                  );
-                })}
+                    <button 
+                      onClick={() => setActiveChart(null)} 
+                      style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                    >
+                      Close Split View ✖
+                    </button>
+                  </div>
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    {/* Render the custom Script Injection Component */}
+                    <TVChart symbol={activeChart} theme={theme} />
+                  </div>
+                </div>
+              )}
+
             </div>
           </main>
         </div>
@@ -296,40 +327,6 @@ function App() {
           <IndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
         </div>
       )}
-
-      {/* Floating TradingView Chart Modal */}
-      {activeChart && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ width: '90%', height: '88%', backgroundColor: t.bgPanel, borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column', border: `1px solid ${t.border}`, boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
-            
-            {/* Modal Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
-              {/* FIX: Stripping the BSE: prefix so the UI looks clean to the user */}
-              <h3 style={{ margin: 0, color: t.textMain, fontSize: '16px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ color: '#3b82f6' }}>📊</span> {activeChart.replace('BSE:', '')}
-              </h3>
-              <button 
-                onClick={() => setActiveChart(null)} 
-                style={{ background: 'transparent', border: 'none', color: t.textMuted, fontSize: '28px', cursor: 'pointer', lineHeight: '1', padding: '0 5px' }}
-                title="Close Chart"
-              >
-                &times;
-              </button>
-            </div>
-            
-            {/* TradingView iframe */}
-            <div style={{ flex: 1, backgroundColor: t.bgPanel }}>
-              <iframe 
-                src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(activeChart)}&interval=D&theme=${theme}&style=1&timezone=Asia%2FKolkata`}
-                style={{ width: '100%', height: '100%', border: 'none' }}
-                title="TradingView Chart Modal"
-              />
-            </div>
-
-          </div>
-        </div>
-      )}
-      
     </div>
   );
 }
@@ -337,5 +334,55 @@ function App() {
 const PullbackIcon = ({ color }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16C10 14.5 14 13 20 11.5" stroke={color} strokeWidth="3" strokeLinecap="round" /><path d="M4 8C10 10 14 16 20 20" stroke={color} strokeOpacity="0.4" strokeWidth="3" strokeLinecap="round" /></svg>
 );
+
+// UPGRADED: Custom Advanced TradingView Component
+// This solves Issue 1 by using script injection to explicitly load studies (EMAs/SMAs) 
+// every time a new symbol is clicked, instead of relying on standard stateless iframes.
+const TVChart = ({ symbol, theme }) => {
+  useEffect(() => {
+    const containerId = 'tv_chart_container';
+    const container = document.getElementById(containerId);
+    if (container) container.innerHTML = ''; // Clear previous chart data
+
+    const loadChart = () => {
+      if (window.TradingView) {
+        new window.TradingView.widget({
+          autosize: true,
+          symbol: symbol,
+          interval: "D",
+          timezone: "Asia/Kolkata",
+          theme: theme,
+          style: "1",
+          locale: "en",
+          enable_publishing: false,
+          hide_top_toolbar: false,
+          hide_legend: false,
+          save_image: false,
+          container_id: containerId,
+          // Injecting the EMAs and SMAs explicitly
+          studies: [
+            "EMA@tv-basicstudies",
+            "EMA@tv-basicstudies",
+            "MASimple@tv-basicstudies"
+          ]
+        });
+      }
+    };
+
+    // If script isn't loaded yet, append it. Otherwise, initialize directly.
+    if (typeof window.TradingView === 'undefined') {
+      const script = document.createElement('script');
+      script.id = 'tv-js-script';
+      script.src = 'https://s3.tradingview.com/tv.js';
+      script.async = true;
+      script.onload = loadChart;
+      document.body.appendChild(script);
+    } else {
+      loadChart();
+    }
+  }, [symbol, theme]);
+
+  return <div id="tv_chart_container" style={{ width: '100%', height: '100%' }} />;
+};
 
 export default App;
