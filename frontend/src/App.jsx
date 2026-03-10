@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import SectorHeatmap from './components/SectorHeatmap';
 import IndustryHeatmap from './components/IndustryHeatmap';
 
@@ -330,41 +330,43 @@ const PullbackIcon = ({ color }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16C10 14.5 14 13 20 11.5" stroke={color} strokeWidth="3" strokeLinecap="round" /><path d="M4 8C10 10 14 16 20 20" stroke={color} strokeOpacity="0.4" strokeWidth="3" strokeLinecap="round" /></svg>
 );
 
-// THE PRO-GRADE FIX: Using React.useRef to keep the widget alive!
+// THE PRO-GRADE FIX: Re-inserting 'symbol' into the dependency array. 
+// This ensures the widget properly updates the stock data on every click.
 const TVChart = ({ symbol, theme }) => {
-  const widgetRef = useRef(null);
-  const isReadyRef = useRef(false);
-
-  // Effect 1: Boot up the widget ONLY when the component mounts or Theme changes
   useEffect(() => {
     const containerId = 'tv_chart_container';
     const container = document.getElementById(containerId);
+    if (container) container.innerHTML = ''; 
 
     const loadChart = () => {
-      if (container) container.innerHTML = ''; 
-      isReadyRef.current = false;
-
-      widgetRef.current = new window.TradingView.widget({
-        autosize: true,
-        symbol: symbol, // Only used for initial load
-        interval: "D",
-        timezone: "Asia/Kolkata",
-        theme: theme,
-        style: "1",
-        locale: "en",
-        enable_publishing: false,
-        hide_top_toolbar: false,
-        hide_legend: false,
-        save_image: false,
-        container_id: containerId
-      });
-
-      // Wait for the chart to be fully built before allowing data swaps
-      widgetRef.current.onChartReady(() => {
-        isReadyRef.current = true;
-        // In case the user clicked really fast while it was still booting
-        widgetRef.current.chart().setSymbol(symbol); 
-      });
+      if (window.TradingView) {
+        new window.TradingView.widget({
+          autosize: true,
+          symbol: symbol,
+          interval: "D",
+          timezone: "Asia/Kolkata",
+          theme: theme,
+          style: "1",
+          locale: "en",
+          enable_publishing: false,
+          hide_top_toolbar: false,
+          hide_legend: false,
+          save_image: false,
+          container_id: containerId,
+          // Auto-injecting the indicators so they don't disappear when the chart reloads!
+          studies: [
+            { id: "MAExp@tv-basicstudies", inputs: { length: 20 } },
+            { id: "MAExp@tv-basicstudies", inputs: { length: 50 } },
+            { id: "MASimple@tv-basicstudies", inputs: { length: 200 } }
+          ],
+          studies_overrides: {
+            "MAExp@tv-basicstudies.plot.color": "#f97316", // Both EMAs will be Orange
+            "MAExp@tv-basicstudies.plot.linewidth": 2,
+            "MASimple@tv-basicstudies.plot.color": theme === 'dark' ? "#f8fafc" : "#0f172a", // SMA Black/White
+            "MASimple@tv-basicstudies.plot.linewidth": 2
+          }
+        });
+      }
     };
 
     if (typeof window.TradingView === 'undefined') {
@@ -377,23 +379,7 @@ const TVChart = ({ symbol, theme }) => {
     } else {
       loadChart();
     }
-
-    // Cleanup: Properly destroy widget if split pane is closed or theme changes
-    return () => {
-      if (widgetRef.current && widgetRef.current.remove) {
-        try { widgetRef.current.remove(); } catch(e) {}
-      }
-      widgetRef.current = null;
-      isReadyRef.current = false;
-    };
-  }, [theme]); // NOTE: "symbol" is purposefully removed from the dependency array!
-
-  // Effect 2: Dynamically swap the data WITHOUT reloading the chart!
-  useEffect(() => {
-    if (widgetRef.current && isReadyRef.current) {
-      widgetRef.current.chart().setSymbol(symbol);
-    }
-  }, [symbol]);
+  }, [symbol, theme]); // <--- Adding 'symbol' back here fixes the freezing issue.
 
   return <div id="tv_chart_container" style={{ width: '100%', height: '100%' }} />;
 };
