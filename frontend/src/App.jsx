@@ -11,6 +11,9 @@ function App() {
   const [activeView, setActiveView] = useState('scanner'); 
   const [searchTerm, setSearchTerm] = useState('');
   const [theme, setTheme] = useState('light');
+  
+  // NEW: State to track which chart modal is currently open
+  const [activeChart, setActiveChart] = useState(null);
 
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
@@ -52,7 +55,6 @@ function App() {
     setSearchTerm(''); 
   };
 
-  // --- EXPORT CSV: Sector added before Industry ---
   const handleExportCSV = () => {
     if (sortedStocks.length === 0) return;
 
@@ -104,7 +106,6 @@ function App() {
     );
   }, [stocks, searchTerm]);
 
-  // --- UPGRADED ROBUST SORTING ENGINE ---
   const sortedStocks = useMemo(() => {
     let items = [...filteredStocks]; 
     if (sortConfig.key) {
@@ -112,19 +113,15 @@ function App() {
         let valA = a[sortConfig.key];
         let valB = b[sortConfig.key];
 
-        // Identify if we are sorting a timestamp column
         const isDateColumn = ['daily_cross_date', 'first_15m_cross_time', 'first_1h_cross_time'].includes(sortConfig.key);
 
         if (isDateColumn) {
-          // Convert valid dates to epoch numbers for flawless mathematical sorting. Push "--" to the bottom.
           valA = (valA && valA !== "--") ? new Date(valA).getTime() : (sortConfig.direction === 'asc' ? Infinity : -Infinity);
           valB = (valB && valB !== "--") ? new Date(valB).getTime() : (sortConfig.direction === 'asc' ? Infinity : -Infinity);
         } else {
-          // Handle standard numeric or text fields
           valA = valA ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
           valB = valB ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
           
-          // Use natural alphabetical string comparison for Ticker and Industry
           if (typeof valA === 'string' && typeof valB === 'string' && valA !== Infinity && valB !== Infinity) {
               return sortConfig.direction === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
           }
@@ -243,7 +240,6 @@ function App() {
               <div onClick={() => toggleSort('daily_cross_date')} style={headerSortStyle}>Daily Cross ⇅</div>
               <div onClick={() => toggleSort('first_15m_cross_time')} style={headerSortStyle}>15m Pullback ⇅</div>
               <div onClick={() => toggleSort('first_1h_cross_time')} style={headerSortStyle}>1H Pullback ⇅</div>
-              {/* Added the click handler to Industry & Sector header */}
               <div onClick={() => toggleSort('industry')} style={headerSortStyle}>Industry & Sector ⇅</div>
             </div>
 
@@ -253,7 +249,25 @@ function App() {
                   const mappedSector = Object.keys(hierarchy).find(sector => hierarchy[sector].includes(s.industry)) || '--';
                   return (
                     <div key={idx} style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `1px solid ${t.border}`, fontSize: '14px' }}>
-                      <div style={{fontWeight:'800', color: t.textTicker}}>{s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace('-EQ','') : '--'}</div>
+                      
+                      {/* UPGRADED: Ticker column now includes the interactive Chart Icon */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                        <div style={{fontWeight:'800', color: t.textTicker}}>{s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace('-EQ','') : '--'}</div>
+                        {s.fyers_symbol && (
+                          <svg 
+                            onClick={() => setActiveChart(s.fyers_symbol.split('-')[0])}
+                            width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                            style={{ cursor: 'pointer', transition: 'stroke 0.2s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.stroke = '#3b82f6'}
+                            onMouseLeave={(e) => e.currentTarget.style.stroke = t.textMuted}
+                            title="Open TradingView Chart"
+                          >
+                            <path d="M3 3v18h18" />
+                            <path d="m19 9-5 5-4-4-3 3" />
+                          </svg>
+                        )}
+                      </div>
+
                       <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? "--"}</div>
                       
                       <div style={{ color: t.textTicker, fontWeight: '700' }}>{formatDT(s.daily_cross_date)}</div>
@@ -279,6 +293,39 @@ function App() {
           <IndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
         </div>
       )}
+
+      {/* NEW: The Floating TradingView Chart Modal */}
+      {activeChart && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <div style={{ width: '90%', height: '88%', backgroundColor: t.bgPanel, borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column', border: `1px solid ${t.border}`, boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
+            
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
+              <h3 style={{ margin: 0, color: t.textMain, fontSize: '16px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: '#3b82f6' }}>📊</span> {activeChart.split(':')[1]}
+              </h3>
+              <button 
+                onClick={() => setActiveChart(null)} 
+                style={{ background: 'transparent', border: 'none', color: t.textMuted, fontSize: '28px', cursor: 'pointer', lineHeight: '1', padding: '0 5px' }}
+                title="Close Chart"
+              >
+                &times;
+              </button>
+            </div>
+            
+            {/* TradingView iframe */}
+            <div style={{ flex: 1, backgroundColor: t.bgPanel }}>
+              <iframe 
+                src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(activeChart)}&interval=D&theme=${theme}&style=1&timezone=Asia%2FKolkata`}
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                title="TradingView Chart Modal"
+              />
+            </div>
+
+          </div>
+        </div>
+      )}
+      
     </div>
   );
 }
