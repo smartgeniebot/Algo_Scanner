@@ -250,12 +250,15 @@ function App() {
                   return (
                     <div key={idx} style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `1px solid ${t.border}`, fontSize: '14px' }}>
                       
-                      {/* UPGRADED: Ticker column now includes the interactive Chart Icon */}
+                      {/* FIX: Converting symbol to BSE right inside the onClick handler to bypass NSE block */}
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                         <div style={{fontWeight:'800', color: t.textTicker}}>{s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace('-EQ','') : '--'}</div>
                         {s.fyers_symbol && (
                           <svg 
-                            onClick={() => setActiveChart(s.fyers_symbol.split('-')[0])}
+                            onClick={() => {
+                              const cleanTicker = s.fyers_symbol.split(':')[1].replace('-EQ','');
+                              setActiveChart(`BSE:${cleanTicker}`);
+                            }}
                             width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                             style={{ cursor: 'pointer', transition: 'stroke 0.2s' }}
                             onMouseEnter={(e) => e.currentTarget.style.stroke = '#3b82f6'}
@@ -294,15 +297,16 @@ function App() {
         </div>
       )}
 
-      {/* NEW: The Floating TradingView Chart Modal */}
+      {/* Floating TradingView Chart Modal */}
       {activeChart && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
           <div style={{ width: '90%', height: '88%', backgroundColor: t.bgPanel, borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column', border: `1px solid ${t.border}`, boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
             
             {/* Modal Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
+              {/* FIX: Stripping the BSE: prefix so the UI looks clean to the user */}
               <h3 style={{ margin: 0, color: t.textMain, fontSize: '16px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ color: '#3b82f6' }}>📊</span> {activeChart.split(':')[1]}
+                <span style={{ color: '#3b82f6' }}>📊</span> {activeChart.replace('BSE:', '')}
               </h3>
               <button 
                 onClick={() => setActiveChart(null)} 
