@@ -351,12 +351,17 @@ const TVChart = ({ symbol, theme }) => {
           hide_legend: false,
           save_image: false,
           container_id: containerId,
-          // THE FIX: TradingView explicitly uses 'MAExp' as the internal ID for Exponential Moving Averages!
           studies: [
             { id: "MAExp@tv-basicstudies", inputs: { length: 20 } },
             { id: "MAExp@tv-basicstudies", inputs: { length: 50 } },
             { id: "MASimple@tv-basicstudies", inputs: { length: 200 } }
-          ]
+          ],
+          studies_overrides: {
+            "MAExp@tv-basicstudies.plot.color": "#f97316", 
+            "MAExp@tv-basicstudies.plot.linewidth": 2,
+            "MASimple@tv-basicstudies.plot.color": theme === 'dark' ? "#f8fafc" : "#0f172a",
+            "MASimple@tv-basicstudies.plot.linewidth": 2
+          }
         });
       }
     };
