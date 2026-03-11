@@ -5,6 +5,7 @@ import IndustryHeatmap from './components/IndustryHeatmap';
 function App() {
   const [hierarchy, setHierarchy] = useState({});
   const [selectedIndustries, setSelectedIndustries] = useState([]);
+  const [selectedFundamentals, setSelectedFundamentals] = useState([]); // 🚀 NEW STATE
   const [stocks, setStocks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: 'rs_score', direction: 'desc' });
@@ -23,12 +24,13 @@ function App() {
   }, []);
 
   const handleScan = () => {
-    if (selectedIndustries.length === 0) return;
+    if (selectedIndustries.length === 0 && selectedFundamentals.length === 0) return;
     setLoading(true);
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ industries: selectedIndustries })
+      // 🚀 Pass both industries and fundamentals to FastAPI
+      body: JSON.stringify({ industries: selectedIndustries, fundamentals: selectedFundamentals })
     }).then(res => res.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
@@ -41,7 +43,8 @@ function App() {
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ industries: industriesToScan })
+      // 🚀 Ensure heatmap scan respects currently checked fundamentals
+      body: JSON.stringify({ industries: industriesToScan, fundamentals: selectedFundamentals })
     }).then(res => res.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
@@ -51,6 +54,7 @@ function App() {
   
   const handleClear = () => {
     setSelectedIndustries([]);
+    setSelectedFundamentals([]); // 🚀 Clear fundamentals on reset
     setStocks([]);
     setSearchTerm(''); 
     setActiveChart(null); 
@@ -161,7 +165,9 @@ function App() {
   const gridRowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center' };
   const headerSortStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
   const tabStyle = { padding: '6px 16px', borderRadius: '6px', border: 'none', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' }; 
-  const isScanDisabled = selectedIndustries.length === 0;
+  
+  // 🚀 Logic updated: Disable if NEITHER an industry NOR a fundamental filter is active
+  const isScanDisabled = selectedIndustries.length === 0 && selectedFundamentals.length === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden', fontFamily: 'Inter, sans-serif', backgroundColor: t.bgApp, color: t.textMain, transition: 'background-color 0.3s' }}>
@@ -194,9 +200,9 @@ function App() {
               <button 
                 onClick={handleScan} 
                 disabled={isScanDisabled}
-                style={{ padding: '12px', backgroundColor: isScanDisabled ? t.border : t.btnPrimaryBg, color: isScanDisabled ? t.textMuted : t.btnPrimaryText, border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '14px', cursor: isScanDisabled ? 'not-allowed' : 'pointer' }}
+                style={{ padding: '12px', backgroundColor: isScanDisabled ? t.border : t.btnPrimaryBg, color: isScanDisabled ? t.textMuted : t.btnPrimaryText, border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '14px', cursor: isScanDisabled ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}
               >
-                {isScanDisabled ? "Select Industries to Scan" : `Scan Active Crosses (${selectedIndustries.length})`}
+                {isScanDisabled ? "Select Filters to Scan" : "Scan Active Crosses"}
               </button>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button onClick={handleSelectAll} style={{ padding: '10px', backgroundColor: t.btnSuccessBg, color: t.btnSuccessText, border: `1px solid ${t.btnSuccessBorder}`, borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', flex: 1 }}>Select All</button>
@@ -204,23 +210,54 @@ function App() {
               </div>
             </div>
             
-            <div style={{ flex: 1, overflow: 'auto', padding: '15px' }}>
-              {Object.keys(hierarchy).map(s => (
-                <div key={s} style={{ marginBottom: '18px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>
-                    <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} onChange={() => {
-                      const inds = hierarchy[s];
-                      const allSel = inds.every(i => selectedIndustries.includes(i));
-                      setSelectedIndustries(prev => allSel ? prev.filter(i => !inds.includes(i)) : [...new Set([...prev, ...inds])]);
-                    }} checked={hierarchy[s]?.every(i => selectedIndustries.includes(i))} /> {s}
-                  </label>
-                  {hierarchy[s].map(i => (
-                    <label key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '24px', marginTop: '6px', fontSize: '13px', color: t.textMuted, cursor: 'pointer' }}>
-                      <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedIndustries.includes(i)} onChange={() => setSelectedIndustries(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i])} /> {i}
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              
+              {/* 🚀 NEW UI BLOCK: Fundamentals Section */}
+              <div style={{ padding: '15px', borderBottom: `2px solid ${t.border}`, backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc' }}>
+                <div style={{ fontWeight: '800', fontSize: '12px', color: t.textMuted, textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>Fundamental Filters</div>
+                
+                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: t.textMain, cursor: 'pointer', marginBottom: '10px', fontWeight: '700' }}>
+                  <input 
+                    type="checkbox" 
+                    style={{ accentColor: t.btnPrimaryBg, width: '16px', height: '16px' }} 
+                    checked={selectedFundamentals.includes('high_growth')}
+                    onChange={() => setSelectedFundamentals(prev => prev.includes('high_growth') ? prev.filter(x => x !== 'high_growth') : [...prev, 'high_growth'])} 
+                  /> 
+                  🚀 High Growth (ROCE)
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: t.textMain, cursor: 'pointer', fontWeight: '700' }}>
+                  <input 
+                    type="checkbox" 
+                    style={{ accentColor: t.btnPrimaryBg, width: '16px', height: '16px' }} 
+                    checked={selectedFundamentals.includes('moderate_growth')}
+                    onChange={() => setSelectedFundamentals(prev => prev.includes('moderate_growth') ? prev.filter(x => x !== 'moderate_growth') : [...prev, 'moderate_growth'])} 
+                  /> 
+                  📈 Moderate Growth (ROCE)
+                </label>
+              </div>
+
+              {/* Technical Sectors & Industries */}
+              <div style={{ padding: '15px' }}>
+                <div style={{ fontWeight: '800', fontSize: '12px', color: t.textMuted, textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>Sectors & Industries</div>
+                {Object.keys(hierarchy).map(s => (
+                  <div key={s} style={{ marginBottom: '18px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>
+                      <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} onChange={() => {
+                        const inds = hierarchy[s];
+                        const allSel = inds.every(i => selectedIndustries.includes(i));
+                        setSelectedIndustries(prev => allSel ? prev.filter(i => !inds.includes(i)) : [...new Set([...prev, ...inds])]);
+                      }} checked={hierarchy[s]?.every(i => selectedIndustries.includes(i))} /> {s}
                     </label>
-                  ))}
-                </div>
-              ))}
+                    {hierarchy[s].map(i => (
+                      <label key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '24px', marginTop: '6px', fontSize: '13px', color: t.textMuted, cursor: 'pointer' }}>
+                        <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedIndustries.includes(i)} onChange={() => setSelectedIndustries(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i])} /> {i}
+                      </label>
+                    ))}
+                  </div>
+                ))}
+              </div>
+
             </div>
           </div>
 

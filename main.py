@@ -1,13 +1,10 @@
-
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from typing import List
+from typing import List, Optional
 from config import NEON_URL
-
 
 app = FastAPI(title="Algo Scanner Cloud API")
 
@@ -19,12 +16,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# 🚀 UPGRADED: Added fundamentals to the request model
 class IndustryRequest(BaseModel):
     industries: List[str]
+    fundamentals: Optional[List[str]] = None
 
 def get_db_connection():
-    # Connecting to Neon Cloud instead of local SQLite!
+    # Connecting to Neon Cloud
     return psycopg2.connect(NEON_URL)
 
 @app.get("/api/filters")
@@ -55,20 +53,47 @@ async def get_filters():
 
 @app.post("/api/stocks")
 async def get_stocks(request: IndustryRequest):
-    if not request.industries: return {"status": "success", "data": []}
+    # 🚀 UPGRADED: Allow scanning if EITHER industries OR fundamentals are selected
+    if not request.industries and not request.fundamentals: 
+        return {"status": "success", "data": []}
+        
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
-    # PostgreSQL uses %s instead of ?
-    placeholders = ', '.join(['%s'] * len(request.industries)) 
+    # Base query logic
+    query_conditions = ["daily_cross_active = 'Yes'"]
+    query_params = []
+    
+    # 1. Handle Industry Filters
+    if request.industries:
+        placeholders = ', '.join(['%s'] * len(request.industries))
+        query_conditions.append(f"industry IN ({placeholders})")
+        query_params.extend(request.industries)
+        
+    # 2. Handle Fundamental Filters
+    if request.fundamentals:
+        fund_conditions = []
+        if "high_growth" in request.fundamentals:
+            fund_conditions.append("is_high_roce = True")
+        if "moderate_growth" in request.fundamentals:
+            fund_conditions.append("is_moderate_growth = True")
+            
+        # If any fundamental filters were checked, group them with an OR
+        # Example output: AND (is_high_roce = True OR is_moderate_growth = True)
+        if fund_conditions:
+            query_conditions.append("(" + " OR ".join(fund_conditions) + ")")
+            
+    # Combine everything into the final SQL string
+    where_clause = " AND ".join(query_conditions)
     
     query = f"""
         SELECT stock_name, fyers_symbol, industry, daily_cross_date, 
                first_15m_cross_time, first_1h_cross_time, rs_score
         FROM stocks 
-        WHERE industry IN ({placeholders}) AND daily_cross_active = 'Yes'
+        WHERE {where_clause}
     """
-    cursor.execute(query, tuple(request.industries))
+    
+    cursor.execute(query, tuple(query_params))
     rows = cursor.fetchall()
     
     cursor.close()
