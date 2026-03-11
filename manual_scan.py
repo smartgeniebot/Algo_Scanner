@@ -27,10 +27,9 @@ def fetch_safe(fyers_obj, payload):
         res = fyers_obj.history(data=payload) 
     return res
 
-# --- 🏆 SCREENER.IN FETCH & UPSERT ENGINE (PAGINATED) ---
-def fetch_and_upsert_screener_winners(conn, cursor):
-    print("\n🔍 Phase 1: Fetching Fundamental Winners from Screener.in...")
-    base_url = "https://www.screener.in/screens/181364/winner-high-roce-high-growth/"
+# --- 🏆 GENERALIZED SCREENER.IN FETCH & UPSERT ENGINE ---
+def fetch_and_upsert_screener(conn, cursor, url, db_column, label):
+    print(f"\n🔍 Fetching {label} from Screener.in...")
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -41,8 +40,8 @@ def fetch_and_upsert_screener_winners(conn, cursor):
     try:
         while True:
             print(f"   -> Scraping Page {page}...")
-            url = f"{base_url}?page={page}"
-            response = requests.get(url, headers=headers)
+            paginated_url = f"{url}?page={page}"
+            response = requests.get(paginated_url, headers=headers)
             
             if response.status_code != 200:
                 print(f"⚠️ Failed to fetch page {page} (Status {response.status_code}). Stopping pagination.")
@@ -80,36 +79,54 @@ def fetch_and_upsert_screener_winners(conn, cursor):
             page += 1
             time.sleep(1) 
 
-        print(f"✅ Successfully scraped {len(fyers_symbols)} High ROCE symbols across {page-1} pages.")
+        print(f"✅ Successfully scraped {len(fyers_symbols)} {label} symbols across {page-1} pages.")
 
         if not fyers_symbols:
-            print("⚠️ No symbols scraped. Skipping database update.")
+            print(f"⚠️ No symbols scraped for {label}. Skipping database update.")
             return
 
-        cursor.execute("UPDATE stocks SET is_high_roce = False")
-        
         for symbol in fyers_symbols:
-            cursor.execute("""
-                INSERT INTO stocks (fyers_symbol, industry, is_high_roce) 
+            # Dynamically insert/update based on which column we are currently scraping
+            query = f"""
+                INSERT INTO stocks (fyers_symbol, industry, {db_column}) 
                 VALUES (%s, 'Unclassified', True)
                 ON CONFLICT (fyers_symbol) 
-                DO UPDATE SET is_high_roce = True
-            """, (symbol,))
+                DO UPDATE SET {db_column} = True
+            """
+            cursor.execute(query, (symbol,))
         
         conn.commit()
-        print("✅ Database fundamental flags updated successfully.\n")
+        print(f"✅ Database {label} flags updated successfully.\n")
 
     except Exception as e:
-        print(f"❌ Error during Screener fetch/upsert: {e}")
+        print(f"❌ Error during {label} Screener fetch/upsert: {e}")
         conn.rollback()
+
+# --- 🚀 MASTER FUNDAMENTAL RUNNER ---
+def run_all_fundamental_scrapes(conn, cursor):
+    print("\n🧹 Phase 1: Resetting all fundamental flags in database to False...")
+    # Reset both columns before we start injecting the fresh daily data
+    cursor.execute("UPDATE stocks SET is_high_roce = False, is_moderate_growth = False")
+    conn.commit()
+    
+    # 1. Scrape High Growth
+    high_growth_url = "https://www.screener.in/screens/181364/winner-high-roce-high-growth/"
+    fetch_and_upsert_screener(conn, cursor, high_growth_url, "is_high_roce", "High Growth")
+    
+    # 2. Scrape Moderate Growth
+    mod_growth_url = "https://www.screener.in/screens/181365/aspirer-high-roce-moderate-growth/"
+    fetch_and_upsert_screener(conn, cursor, mod_growth_url, "is_moderate_growth", "Moderate Growth")
+
 
 # --- 🚀 THE MAIN TECHNICAL SCAN ENGINE ---
 def run_daily_scan():
     conn = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
 
-    fetch_and_upsert_screener_winners(conn, cursor)
+    # PHASE 1: Run both Screener.in scrapes
+    run_all_fundamental_scrapes(conn, cursor)
 
+    # PHASE 2: Technical Scan
     fyers = get_fyers()
     today_ist = datetime.now(IST).date()
     
@@ -203,8 +220,7 @@ def run_daily_scan():
                                         epoch_15 = int(float(c_15['date'].iloc[0]))
                                         new_15m = datetime.fromtimestamp(epoch_15, IST).strftime('%Y-%m-%d %H:%M')
 
-            # 🛡️ BULLETPROOF FIX: We now commit immediately after updating EACH stock.
-            # If Stock #99 fails, Stocks #1-98 are already safely locked in the database.
+            # 🛡️ BULLETPROOF FIX: Commit immediately after updating EACH stock.
             cursor.execute("""
                 UPDATE stocks 
                 SET rs_score=%s, daily_cross_active=%s, daily_cross_date=%s, first_1h_cross_time=%s, first_15m_cross_time=%s 
@@ -218,7 +234,6 @@ def run_daily_scan():
 
         except Exception as e:
             tqdm.write(f"❌ Error on {symbol}: {e}")
-            # If an error occurs, we rollback ONLY the current single stock's transaction
             conn.rollback()
             
         finally:
