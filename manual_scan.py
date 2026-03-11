@@ -1,11 +1,11 @@
 import time
+import requests
 import pandas as pd
 import pandas_ta_classic as ta
+from bs4 import BeautifulSoup
 from fyers_apiv3 import fyersModel
 from datetime import date, datetime, timedelta, timezone
 from tqdm import tqdm
-
-# ☁️ NEW: Import psycopg2 and your Neon config
 import psycopg2
 from config import NEON_URL
 
@@ -24,31 +24,108 @@ def fetch_safe(fyers_obj, payload):
     if isinstance(res, dict) and res.get('s') == 'error' and 'limit' in str(res.get('message')).lower():
         tqdm.write("⏳ Fyers Speed Limit Hit! Cooling down for 45 seconds...")
         time.sleep(45)
-        res = fyers_obj.history(data=payload) # Retry after cooldown
+        res = fyers_obj.history(data=payload) 
     return res
 
+# --- 🏆 SCREENER.IN FETCH & UPSERT ENGINE (PAGINATED) ---
+def fetch_and_upsert_screener_winners(conn, cursor):
+    print("\n🔍 Phase 1: Fetching Fundamental Winners from Screener.in...")
+    base_url = "https://www.screener.in/screens/181364/winner-high-roce-high-growth/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    fyers_symbols = []
+    page = 1
+
+    try:
+        while True:
+            print(f"   -> Scraping Page {page}...")
+            url = f"{base_url}?page={page}"
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code != 200:
+                print(f"⚠️ Failed to fetch page {page} (Status {response.status_code}). Stopping pagination.")
+                break
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            table = soup.find('table', class_='data-table')
+            
+            if not table:
+                break
+
+            rows = table.find('tbody').find_all('tr')
+            if not rows:
+                break
+            
+            symbols_on_page = 0
+            for row in rows:
+                name_cell = row.find('a')
+                if name_cell and 'href' in name_cell.attrs:
+                    href = name_cell['href']
+                    parts = href.split('/')
+                    if len(parts) > 2:
+                        raw_ticker = parts[2]
+                        # Fix: Screener replaces '&' with '_' in some URLs. We convert it back for Fyers.
+                        clean_ticker = raw_ticker.replace('_', '&')
+                        fyers_symbol = f"NSE:{clean_ticker}-EQ"
+                        
+                        if fyers_symbol not in fyers_symbols:
+                            fyers_symbols.append(fyers_symbol)
+                            symbols_on_page += 1
+            
+            if symbols_on_page == 0:
+                break
+                
+            page += 1
+            time.sleep(1) 
+
+        print(f"✅ Successfully scraped {len(fyers_symbols)} High ROCE symbols across {page-1} pages.")
+
+        if not fyers_symbols:
+            print("⚠️ No symbols scraped. Skipping database update.")
+            return
+
+        cursor.execute("UPDATE stocks SET is_high_roce = False")
+        
+        for symbol in fyers_symbols:
+            cursor.execute("""
+                INSERT INTO stocks (fyers_symbol, industry, is_high_roce) 
+                VALUES (%s, 'Unclassified', True)
+                ON CONFLICT (fyers_symbol) 
+                DO UPDATE SET is_high_roce = True
+            """, (symbol,))
+        
+        conn.commit()
+        print("✅ Database fundamental flags updated successfully.\n")
+
+    except Exception as e:
+        print(f"❌ Error during Screener fetch/upsert: {e}")
+        conn.rollback()
+
+# --- 🚀 THE MAIN TECHNICAL SCAN ENGINE ---
 def run_daily_scan():
+    conn = psycopg2.connect(NEON_URL)
+    cursor = conn.cursor()
+
+    fetch_and_upsert_screener_winners(conn, cursor)
+
     fyers = get_fyers()
     today_ist = datetime.now(IST).date()
     
-    # 1. Benchmark for RS
     n_res = fetch_safe(fyers, {"symbol": "NSE:NIFTY50-INDEX", "resolution": "1D", "date_format": "1",
                                 "range_from": (today_ist - timedelta(days=300)).strftime("%Y-%m-%d"),
                                 "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
     
     n_df = pd.DataFrame(n_res.get('candles', []), columns=['date','open','high','low','close','vol'])
 
-    # ☁️ NEW: Connect to Neon Cloud Database
-    conn = psycopg2.connect(NEON_URL)
-    cursor = conn.cursor()
     cursor.execute("SELECT id, fyers_symbol, daily_cross_active, daily_cross_date, first_1h_cross_time, first_15m_cross_time FROM stocks")
     stocks = cursor.fetchall()
 
-    print(f"🚀 Limit-Proof Cloud Scan Started for {len(stocks)} stocks...")
+    print(f"🚀 Phase 2: Limit-Proof Technical Scan Started for {len(stocks)} stocks...")
 
     for stock_id, symbol, db_daily_active, db_daily_date, db_first_1h_time, db_first_15m_time in tqdm(stocks):
         try:
-            # --- FETCH 1D DATA ---
             res = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
                                       "range_from": (today_ist - timedelta(days=364)).strftime("%Y-%m-%d"),
                                       "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
@@ -59,12 +136,10 @@ def run_daily_scan():
             df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
             if len(df) < 10: continue
             
-            # --- 1. LATEST RS CALC ---
             bars = min(len(df), 56)
             s_curr, s_past = df['close'].iloc[-1], df['close'].iloc[-bars]
             n_curr, n_past = n_df['close'].iloc[-1], n_df['close'].iloc[-bars]
             
-            # 🛡️ THE FIX 1: Wrap in float() to strip away numpy formatting for Postgres
             rs_val = float(round(((s_curr / s_past) / (n_curr / n_past)) - 1, 2))
 
             new_active = "No"
@@ -96,7 +171,6 @@ def run_daily_scan():
                                 new_1h = db_first_1h_time
                                 new_15m = db_first_15m_time
                             
-                            # --- DYNAMIC INTRADAY FETCH ---
                             fetch_days = min(days_active + 25, 95) 
                             from_dt_intra = (today_ist - timedelta(days=fetch_days)).strftime("%Y-%m-%d")
                             to_dt_intra = today_ist.strftime("%Y-%m-%d")
@@ -129,30 +203,30 @@ def run_daily_scan():
                                         epoch_15 = int(float(c_15['date'].iloc[0]))
                                         new_15m = datetime.fromtimestamp(epoch_15, IST).strftime('%Y-%m-%d %H:%M')
 
-            # --- 3. DATABASE UPDATE ---
+            # 🛡️ BULLETPROOF FIX: We now commit immediately after updating EACH stock.
+            # If Stock #99 fails, Stocks #1-98 are already safely locked in the database.
             cursor.execute("""
                 UPDATE stocks 
                 SET rs_score=%s, daily_cross_active=%s, daily_cross_date=%s, first_1h_cross_time=%s, first_15m_cross_time=%s 
                 WHERE id=%s
             """, (rs_val, new_active, new_date, new_1h, new_15m, stock_id))
             
+            conn.commit()
+
             if new_active == "Yes":
                 tqdm.write(f"🎯 SAVED {symbol} -> Daily: {new_date} | 1H: {new_1h} | 15M: {new_15m}")
-                
-            if stock_id % 100 == 0: conn.commit()
 
         except Exception as e:
             tqdm.write(f"❌ Error on {symbol}: {e}")
-            # 🛡️ THE FIX 2: Rollback the transaction block so the next stock doesn't instantly fail!
+            # If an error occurs, we rollback ONLY the current single stock's transaction
             conn.rollback()
             
         finally:
             time.sleep(0.25) 
 
-    conn.commit()
     cursor.close()
     conn.close()
-    print("✅ Limit-Proof Cloud Scan Complete. Database updated!")
+    print("✅ Limit-Proof Cloud Scan Complete. Database fully synchronized!")
 
 if __name__ == "__main__":
     run_daily_scan()
