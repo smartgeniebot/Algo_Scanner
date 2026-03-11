@@ -5,7 +5,7 @@ import IndustryHeatmap from './components/IndustryHeatmap';
 function App() {
   const [hierarchy, setHierarchy] = useState({});
   const [selectedIndustries, setSelectedIndustries] = useState([]);
-  const [selectedFundamentals, setSelectedFundamentals] = useState([]); // 🚀 NEW STATE
+  const [selectedFundamentals, setSelectedFundamentals] = useState([]);
   const [stocks, setStocks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: 'rs_score', direction: 'desc' });
@@ -13,7 +13,6 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [theme, setTheme] = useState('light');
   
-  // State to track which chart is open in the bottom split-pane
   const [activeChart, setActiveChart] = useState(null);
 
   useEffect(() => {
@@ -29,7 +28,6 @@ function App() {
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // 🚀 Pass both industries and fundamentals to FastAPI
       body: JSON.stringify({ industries: selectedIndustries, fundamentals: selectedFundamentals })
     }).then(res => res.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
@@ -39,22 +37,26 @@ function App() {
   const triggerScanFromHeatmap = (industriesToScan) => {
     setSelectedIndustries(industriesToScan);
     setActiveView('scanner');
+    setActiveChart(null); // 🛡️ HIDDEN BUG FIX: Clears the chart so you don't look at a stale stock
     setLoading(true);
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // 🚀 Ensure heatmap scan respects currently checked fundamentals
       body: JSON.stringify({ industries: industriesToScan, fundamentals: selectedFundamentals })
     }).then(res => res.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
   };
 
-  const handleSelectAll = () => setSelectedIndustries(Object.values(hierarchy).flat());
+  const handleSelectAll = () => {
+    // 🛡️ FIX: Now selects both all industries and all fundamentals
+    setSelectedIndustries(Object.values(hierarchy).flat());
+    setSelectedFundamentals(['high_growth', 'moderate_growth']);
+  };
   
   const handleClear = () => {
     setSelectedIndustries([]);
-    setSelectedFundamentals([]); // 🚀 Clear fundamentals on reset
+    setSelectedFundamentals([]); 
     setStocks([]);
     setSearchTerm(''); 
     setActiveChart(null); 
@@ -107,7 +109,8 @@ function App() {
     if (!searchTerm) return stocks;
     const lowerSearch = searchTerm.toLowerCase();
     return stocks.filter(stock =>
-      Object.values(stock).some(val => String(val).toLowerCase().includes(lowerSearch))
+      // 🛡️ HIDDEN BUG FIX: Added || '' to prevent silent crashes if a database column is NULL
+      Object.values(stock).some(val => String(val || '').toLowerCase().includes(lowerSearch))
     );
   }, [stocks, searchTerm]);
 
@@ -165,8 +168,6 @@ function App() {
   const gridRowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center' };
   const headerSortStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
   const tabStyle = { padding: '6px 16px', borderRadius: '6px', border: 'none', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' }; 
-  
-  // 🚀 Logic updated: Disable if NEITHER an industry NOR a fundamental filter is active
   const isScanDisabled = selectedIndustries.length === 0 && selectedFundamentals.length === 0;
 
   return (
@@ -212,24 +213,24 @@ function App() {
             
             <div style={{ flex: 1, overflow: 'auto' }}>
               
-              {/* 🚀 NEW UI BLOCK: Fundamentals Section */}
               <div style={{ padding: '15px', borderBottom: `2px solid ${t.border}`, backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc' }}>
                 <div style={{ fontWeight: '800', fontSize: '12px', color: t.textMuted, textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>Fundamental Filters</div>
                 
-                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: t.textMain, cursor: 'pointer', marginBottom: '10px', fontWeight: '700' }}>
+                {/* 🛡️ UI FIX: Font size and weight perfectly mirror the sector checkboxes */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', marginBottom: '10px' }}>
                   <input 
                     type="checkbox" 
-                    style={{ accentColor: t.btnPrimaryBg, width: '16px', height: '16px' }} 
+                    style={{ accentColor: t.btnPrimaryBg }} 
                     checked={selectedFundamentals.includes('high_growth')}
                     onChange={() => setSelectedFundamentals(prev => prev.includes('high_growth') ? prev.filter(x => x !== 'high_growth') : [...prev, 'high_growth'])} 
                   /> 
                   🚀 High Growth (ROCE)
                 </label>
 
-                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: t.textMain, cursor: 'pointer', fontWeight: '700' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', marginBottom: '8px' }}>
                   <input 
                     type="checkbox" 
-                    style={{ accentColor: t.btnPrimaryBg, width: '16px', height: '16px' }} 
+                    style={{ accentColor: t.btnPrimaryBg }} 
                     checked={selectedFundamentals.includes('moderate_growth')}
                     onChange={() => setSelectedFundamentals(prev => prev.includes('moderate_growth') ? prev.filter(x => x !== 'moderate_growth') : [...prev, 'moderate_growth'])} 
                   /> 
@@ -237,7 +238,6 @@ function App() {
                 </label>
               </div>
 
-              {/* Technical Sectors & Industries */}
               <div style={{ padding: '15px' }}>
                 <div style={{ fontWeight: '800', fontSize: '12px', color: t.textMuted, textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>Sectors & Industries</div>
                 {Object.keys(hierarchy).map(s => (
@@ -342,7 +342,6 @@ function App() {
                     </button>
                   </div>
                   <div style={{ flex: 1, position: 'relative' }}>
-                    {/* The key property forces React to unmount and remount a completely fresh chart for every stock */}
                     <TVChart key={activeChart + theme} symbol={activeChart} theme={theme} />
                   </div>
                 </div>
@@ -368,7 +367,6 @@ const PullbackIcon = ({ color }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16C10 14.5 14 13 20 11.5" stroke={color} strokeWidth="3" strokeLinecap="round" /><path d="M4 8C10 10 14 16 20 20" stroke={color} strokeOpacity="0.4" strokeWidth="3" strokeLinecap="round" /></svg>
 );
 
-// The stripped-down, reliable TVChart component
 const TVChart = ({ symbol, theme }) => {
   useEffect(() => {
     const containerId = 'tv_chart_container';
@@ -390,7 +388,6 @@ const TVChart = ({ symbol, theme }) => {
           hide_legend: false,
           save_image: false,
           container_id: containerId,
-          // Indicators are injected freshly on every mount
           studies: [
             { id: "MAExp@tv-basicstudies", inputs: { length: 20 } },
             { id: "MAExp@tv-basicstudies", inputs: { length: 50 } },
@@ -410,7 +407,6 @@ const TVChart = ({ symbol, theme }) => {
     } else {
       loadChart();
     }
-    // No dependency array needed because the component is fully remounted via the `key` prop
   }, []); 
 
   return <div id="tv_chart_container" style={{ width: '100%', height: '100%' }} />;
