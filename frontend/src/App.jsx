@@ -14,6 +14,9 @@ function App() {
   const [theme, setTheme] = useState('light');
   
   const [activeChart, setActiveChart] = useState(null);
+  
+  // 🚀 NEW: State for the manual trigger button
+  const [triggerStatus, setTriggerStatus] = useState('idle'); // idle, loading, success, error
 
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
@@ -60,6 +63,30 @@ function App() {
     setStocks([]);
     setSearchTerm(''); 
     setActiveChart(null); 
+  };
+
+  // 🚀 NEW: Function to securely call the backend trigger
+  const handleTriggerEngine = () => {
+    setTriggerStatus('loading');
+    fetch('https://algo-scanner-lnck.onrender.com/api/trigger-scan', {
+      method: 'POST'
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.status === "success") {
+        setTriggerStatus('success');
+        setTimeout(() => setTriggerStatus('idle'), 4000); // Reset after 4 seconds
+      } else {
+        console.error("Trigger Failed:", data.message);
+        setTriggerStatus('error');
+        setTimeout(() => setTriggerStatus('idle'), 4000);
+      }
+    })
+    .catch(err => {
+      console.error("Network Error:", err);
+      setTriggerStatus('error');
+      setTimeout(() => setTriggerStatus('idle'), 4000);
+    });
   };
 
   const handleExportCSV = () => {
@@ -183,13 +210,40 @@ function App() {
           </div>
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          
+          {/* 🚀 NEW: Manual Sync Button */}
+          <button 
+            onClick={handleTriggerEngine}
+            disabled={triggerStatus !== 'idle'}
+            style={{ 
+              padding: '6px 14px', 
+              borderRadius: '20px', 
+              backgroundColor: triggerStatus === 'loading' ? '#eab308' : triggerStatus === 'success' ? '#10b981' : triggerStatus === 'error' ? '#ef4444' : t.btnPrimaryBg, 
+              color: '#ffffff', 
+              border: 'none', 
+              cursor: triggerStatus === 'idle' ? 'pointer' : 'not-allowed', 
+              fontWeight: 'bold', 
+              fontSize: '12px',
+              transition: 'all 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            {triggerStatus === 'idle' && '🔄 Sync Market Data'}
+            {triggerStatus === 'loading' && '⏳ Starting...'}
+            {triggerStatus === 'success' && '✅ Triggered!'}
+            {triggerStatus === 'error' && '❌ Failed'}
+          </button>
+
           <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} style={{ padding: '6px 12px', borderRadius: '20px', backgroundColor: t.bgApp, color: t.textMain, border: `1px solid ${t.border}`, cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}>
             {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
           </button>
+          
           <div style={{ fontWeight: '600', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px', color: t.textMuted }}>
             <span style={{ width: '8px', height: '8px', backgroundColor: '#10b981', borderRadius: '50%', display: 'inline-block' }}></span>
-            LIVE DATA READY
+            LIVE
           </div>
         </div>
       </header>

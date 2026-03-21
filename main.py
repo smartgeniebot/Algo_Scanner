@@ -5,6 +5,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from typing import List, Optional
 from config import NEON_URL
+import os          # 🚀 NEW: Required to read Render environment variables
+import requests    # 🚀 NEW: Required to send the POST request to GitHub
 
 app = FastAPI(title="Algo Scanner Cloud API")
 
@@ -173,6 +175,35 @@ async def get_industry_heatmap():
     cursor.close()
     conn.close()
     return industries
+
+# 🚀 NEW: Secure GitHub Trigger Endpoint
+@app.post("/api/trigger-scan")
+async def trigger_github_scan():
+    token = os.environ.get("GITHUB_TOKEN")
+    repo = os.environ.get("GITHUB_REPO")
+    workflow = os.environ.get("GITHUB_WORKFLOW")
+    
+    if not token or not repo or not workflow:
+        return {"status": "error", "message": "Server missing GitHub credentials"}
+
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    # Tells GitHub to run the script on the 'main' branch
+    data = {"ref": "main"} 
+    
+    response = requests.post(url, headers=headers, json=data)
+    
+    # GitHub returns 204 No Content if the trigger is successful
+    if response.status_code == 204:
+        return {"status": "success", "message": "Background scan initiated successfully"}
+    else:
+        return {"status": "error", "message": f"GitHub Error: {response.text}"}
+
 
 if __name__ == "__main__":
     import uvicorn
