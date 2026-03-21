@@ -1,9 +1,9 @@
 name: Chart Hawks Morning Engine
 
 on:
-  schedule:
-    # Runs at 12:30 UTC (06:00 PM IST) Mon-Fri
-    - cron: '30 12 * * 1-5'
+ # schedule:
+ #   # Runs at 12:30 UTC (06:00 PM IST) Mon-Fri
+ #   - cron: '30 12 * * 1-5'
   workflow_dispatch: # This adds a "Run Now" button for testing!
 
 jobs:
