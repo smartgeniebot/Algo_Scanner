@@ -229,12 +229,25 @@ async def refresh_nse_tickers():
         nse_csv_url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
         http_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,*/*",
-            "Referer": "https://www.nseindia.com/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-User": "?1",
         }
         session = requests.Session()
         try:
+            # Hit the main site first to get cookies, then the securities page for correct referer context
             session.get("https://www.nseindia.com", headers=http_headers, timeout=15)
+            time.sleep(1)
+            session.get("https://www.nseindia.com/market-data/securities-available-for-trading",
+                        headers=http_headers, timeout=15)
+            time.sleep(1)
             resp = session.get(nse_csv_url, headers=http_headers, timeout=30)
             resp.raise_for_status()
         except Exception as e:
