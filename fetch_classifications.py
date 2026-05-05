@@ -19,16 +19,16 @@ BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
 }
 
 def make_session():
     session = requests.Session()
     session.headers.update(BASE_HEADERS)
-    session.get("https://www.nseindia.com",
-                headers={"Accept": "text/html,*/*"}, timeout=15)
-    time.sleep(1)
+    # Use a stock page to init the session cookie (homepage returns 403 from some IPs)
+    session.get("https://www.nseindia.com/get-quote/equity/RELIANCE", timeout=15)
+    time.sleep(2)
     return session
 
 def fetch_equity_list(session):

@@ -1,37 +1,58 @@
 """
 NSE Ticker Refresh — runs via GitHub Actions.
-1. Downloads EQUITY_L.csv from NSE archives (GitHub IPs not blocked for this).
-2. Upserts all stocks into Neon DB, deletes delisted ones.
-3. Reads sector & industry from nse_classifications.json (committed to repo).
-4. Updates sector & industry in Neon DB.
+1. Downloads EQUITY_L.csv from NSE archives.
+2. Smoke test: verifies quote-equity API works with 5 stocks.
+3. Upserts all stocks into Neon DB, deletes delisted ones.
+4. Fetches sector & industry for all stocks (multithreaded).
+5. Updates sector & industry in Neon DB.
 
-nse_classifications.json is generated locally by fetch_classifications.py
-and committed to the repo. Run that script once a month before pushing.
+Root cause fix: Accept-Encoding must be 'gzip, deflate' only.
+Adding 'br' causes NSE to return Brotli which requests cannot decode.
 """
 
-import csv, io, json, os
-import psycopg2
+import csv, io, os, time, requests, psycopg2
 from psycopg2.extras import execute_values
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-NEON_URL = os.environ["NEON_URL"]
+NEON_URL  = os.environ["NEON_URL"]
+WORKERS   = 10
+DELAY     = 0.3
+BATCH_LOG = 100
 
-BASE_HEADERS = {
+NSE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,*/*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading",
+    "Accept-Encoding": "gzip, deflate",   # NO 'br' — brotli breaks requests decoding
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-site",
+    "Connection": "keep-alive",
+}
+
+API_HEADERS = {
+    **NSE_HEADERS,
+    "Accept": "application/json, text/plain, */*",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
 }
 
 
-def fetch_equity_list() -> list[dict]:
-    import requests, time
+def make_session() -> requests.Session:
     session = requests.Session()
-    session.get("https://www.nseindia.com", headers=BASE_HEADERS, timeout=15)
-    time.sleep(1)
+    session.headers.update(NSE_HEADERS)
+    session.get("https://www.nseindia.com/get-quote/equity/RELIANCE", timeout=15)
+    time.sleep(2)
+    return session
+
+
+def fetch_equity_list(session: requests.Session) -> list[dict]:
     resp = session.get(
         "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
-        headers=BASE_HEADERS, timeout=30,
+        headers={**NSE_HEADERS, "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading"},
+        timeout=30,
     )
     resp.raise_for_status()
     stocks = []
@@ -47,6 +68,22 @@ def fetch_equity_list() -> list[dict]:
                 "fyers_symbol": f"NSE:{symbol}-{series}",
             })
     return stocks
+
+
+def fetch_classification(symbol: str, session: requests.Session) -> dict:
+    try:
+        time.sleep(DELAY)
+        r = session.get(
+            f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
+            headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            info = r.json().get("industryInfo", {})
+            return {"symbol": symbol, "sector": info.get("sector", ""), "industry": info.get("industry", "")}
+    except Exception:
+        pass
+    return {"symbol": symbol, "sector": "", "industry": ""}
 
 
 def ensure_schema(cur):
@@ -69,14 +106,37 @@ def main():
     print("NSE Ticker Refresh — Starting")
     print("=" * 60)
 
+    # ── Init session ─────────────────────────────────────────────
+    print("\nInitializing NSE session...")
+    session = make_session()
+    print("      ✅ Session ready")
+
     # ── Step 1: Download stock list ──────────────────────────────
-    print("\n[1/3] Fetching EQUITY_L.csv from NSE archives...")
-    stock_list = fetch_equity_list()
+    print("\n[1/4] Fetching EQUITY_L.csv from NSE archives...")
+    stock_list = fetch_equity_list(session)
     total = len(stock_list)
     print(f"      ✅ {total} stocks loaded")
 
-    # ── Step 2: Upsert into DB & remove delisted ─────────────────
-    print("\n[2/3] Syncing stock list to Neon DB...")
+    # ── Smoke test with 5 stocks ─────────────────────────────────
+    print("\n[TEST] Verifying quote-equity API with 5 stocks...")
+    test_symbols = ["RELIANCE", "INFY", "HDFCBANK", "TCS", "SBIN"]
+    passed = 0
+    for sym in test_symbols:
+        r = fetch_classification(sym, session)
+        if r["sector"]:
+            print(f"      ✅ {sym}: {r['sector']} / {r['industry']}")
+            passed += 1
+        else:
+            print(f"      ❌ {sym}: no data")
+
+    if passed == 0:
+        print("\n❌ ABORT: All 5 test stocks failed. Not proceeding.")
+        raise SystemExit(1)
+
+    print(f"      {passed}/5 passed — proceeding with full run\n")
+
+    # ── Step 2: Upsert stock list into DB ────────────────────────
+    print("[2/4] Syncing stock list to Neon DB...")
     conn = psycopg2.connect(NEON_URL)
     cur  = conn.cursor()
     ensure_schema(cur)
@@ -100,34 +160,45 @@ def main():
     conn.commit()
     print(f"      ✅ Upserted {total} | Removed {deleted} delisted stocks")
 
-    # ── Step 3: Apply classifications from JSON ──────────────────
-    print("\n[3/3] Applying sector & industry from nse_classifications.json...")
-    json_path = os.path.join(os.path.dirname(__file__), "nse_classifications.json")
+    # ── Step 3: Fetch sector & industry in parallel ──────────────
+    print(f"\n[3/4] Fetching sector & industry ({WORKERS} threads)...")
+    classified = {}
+    failed     = 0
+    done_count = 0
 
-    if not os.path.exists(json_path):
-        print("      ⚠ nse_classifications.json not found — skipping classification update.")
-        print("        Run fetch_classifications.py locally and commit the file.")
-    else:
-        with open(json_path) as f:
-            classifications = json.load(f)
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        futures = {executor.submit(fetch_classification, s["symbol"], session): s["symbol"]
+                   for s in stock_list}
+        for future in as_completed(futures):
+            done_count += 1
+            result = future.result()
+            if result["sector"] or result["industry"]:
+                classified[result["symbol"]] = result
+            else:
+                failed += 1
+            if done_count % BATCH_LOG == 0 or done_count == total:
+                print(f"      ↳ {done_count}/{total} — {len(classified)} classified, {failed} failed")
 
-        updated = 0
-        for sym, info in classifications.items():
-            cur.execute("""
-                UPDATE stocks SET sector = %s, industry = %s
-                WHERE fyers_symbol IN (%s, %s, %s)
-            """, (info.get("sector",""), info.get("industry",""),
-                  f"NSE:{sym}-EQ", f"NSE:{sym}-BE", f"NSE:{sym}-BZ"))
-            updated += cur.rowcount
+    print(f"      ✅ {len(classified)}/{total} stocks classified")
 
-        conn.commit()
-        print(f"      ✅ {updated} rows updated with sector & industry")
+    # ── Step 4: Write to DB ──────────────────────────────────────
+    print(f"\n[4/4] Writing sector & industry to DB...")
+    updated = 0
+    for sym, info in classified.items():
+        cur.execute("""
+            UPDATE stocks SET sector = %s, industry = %s
+            WHERE fyers_symbol IN (%s, %s, %s)
+        """, (info["sector"], info["industry"],
+              f"NSE:{sym}-EQ", f"NSE:{sym}-BE", f"NSE:{sym}-BZ"))
+        updated += cur.rowcount
 
+    conn.commit()
     cur.close()
     conn.close()
+    print(f"      ✅ {updated} rows updated")
 
     print("\n" + "=" * 60)
-    print(f"✅ Done — {total} synced, {deleted} removed")
+    print(f"✅ Done — {total} synced, {len(classified)} classified, {deleted} removed")
     print("=" * 60)
 
 
