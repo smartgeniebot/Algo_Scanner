@@ -1,12 +1,19 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 from typing import List, Optional
 from config import NEON_URL
-import os          # 🚀 NEW: Required to read Render environment variables
-import requests    # 🚀 NEW: Required to send the POST request to GitHub
+import os
+import io
+import csv
+import time
+import json
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 app = FastAPI(title="Algo Scanner Cloud API")
 
@@ -175,6 +182,198 @@ async def get_industry_heatmap():
     cursor.close()
     conn.close()
     return industries
+
+def _fetch_industry_info(symbol: str, session: requests.Session, lock: Lock) -> dict:
+    """Fetch sector and industry for one symbol from NSE quote-equity API."""
+    url = f"https://www.nseindia.com/api/quote-equity?symbol={symbol}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}",
+    }
+    try:
+        with lock:
+            resp = session.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            info = data.get("industryInfo", {})
+            return {
+                "symbol": symbol,
+                "sector": info.get("sector", ""),
+                "industry": info.get("industry", ""),
+            }
+    except Exception:
+        pass
+    return {"symbol": symbol, "sector": "", "industry": ""}
+
+
+@app.get("/api/refresh-nse-tickers")
+async def refresh_nse_tickers():
+    """
+    Streams progress as Server-Sent Events (SSE).
+    Steps:
+      1. Download EQUITY_L.csv from NSE archives (all stocks, all series).
+      2. Upsert stock list into DB; delete delisted stocks.
+      3. Fetch sector & industry for every symbol in parallel (10 threads).
+      4. Batch-update DB with classification data.
+    """
+
+    def event(msg: str, done: bool = False) -> str:
+        payload = json.dumps({"message": msg, "done": done})
+        return f"data: {payload}\n\n"
+
+    def run():
+        # ── Step 1: Download EQUITY_L.csv ──────────────────────────────────
+        yield event("📥 Fetching stock list from NSE EQUITY_L.csv...")
+
+        nse_csv_url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+        http_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,*/*",
+            "Referer": "https://www.nseindia.com/",
+        }
+        session = requests.Session()
+        try:
+            session.get("https://www.nseindia.com", headers=http_headers, timeout=15)
+            resp = session.get(nse_csv_url, headers=http_headers, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            yield event(f"❌ Failed to fetch EQUITY_L.csv: {e}", done=True)
+            return
+
+        reader = csv.DictReader(io.StringIO(resp.text))
+        stock_list = []
+        for row in reader:
+            symbol    = row.get("SYMBOL", "").strip()
+            name      = row.get("NAME OF COMPANY", "").strip()
+            series    = row.get(" SERIES", "").strip()
+            isin      = row.get(" ISIN NUMBER", "").strip()
+            if not symbol:
+                continue
+            fyers_symbol = f"NSE:{symbol}-{series}"
+            stock_list.append({"symbol": symbol, "name": name, "series": series,
+                                "isin": isin, "fyers_symbol": fyers_symbol})
+
+        total = len(stock_list)
+        yield event(f"✅ {total} stocks found in EQUITY_L.csv")
+
+        # ── Step 2: Upsert stock list & delete delisted ─────────────────────
+        yield event("💾 Syncing stock list to database...")
+        try:
+            conn = get_db_connection()
+            cur  = conn.cursor()
+
+            cur.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS isin TEXT;")
+            cur.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS series TEXT;")
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = 'stocks_fyers_symbol_key'
+                    ) THEN
+                        ALTER TABLE stocks ADD CONSTRAINT stocks_fyers_symbol_key UNIQUE (fyers_symbol);
+                    END IF;
+                END $$;
+            """)
+            conn.commit()
+
+            upsert_rows = [(s["name"], s["fyers_symbol"], s["series"], s["isin"]) for s in stock_list]
+            execute_values(cur, """
+                INSERT INTO stocks (stock_name, fyers_symbol, series, isin)
+                VALUES %s
+                ON CONFLICT (fyers_symbol) DO UPDATE SET
+                    stock_name = EXCLUDED.stock_name,
+                    series     = EXCLUDED.series,
+                    isin       = EXCLUDED.isin
+            """, upsert_rows)
+            conn.commit()
+
+            cur.execute("CREATE TEMP TABLE _nse_fresh (fyers_symbol TEXT) ON COMMIT DROP")
+            execute_values(cur, "INSERT INTO _nse_fresh VALUES %s",
+                           [(s["fyers_symbol"],) for s in stock_list])
+            cur.execute("DELETE FROM stocks WHERE fyers_symbol NOT IN (SELECT fyers_symbol FROM _nse_fresh)")
+            deleted = cur.rowcount
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            yield event(f"❌ DB sync failed: {e}", done=True)
+            return
+
+        yield event(f"✅ DB synced — {deleted} delisted stocks removed")
+
+        # ── Step 3: Fetch sector & industry in parallel ─────────────────────
+        yield event(f"🔍 Fetching sector & industry for {total} stocks (10 threads)...")
+
+        # NSE sessions are not thread-safe for cookies; use a shared lock around requests
+        lock        = Lock()
+        results     = {}
+        errors      = 0
+        done_count  = 0
+        BATCH       = 50   # report progress every 50 stocks
+        WORKERS     = 10
+        DELAY       = 0.2  # seconds between requests inside each thread
+
+        def fetch_with_delay(stock):
+            time.sleep(DELAY)
+            return _fetch_industry_info(stock["symbol"], session, lock)
+
+        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+            futures = {executor.submit(fetch_with_delay, s): s for s in stock_list}
+            for future in as_completed(futures):
+                done_count += 1
+                result = future.result()
+                sym = result["symbol"]
+                if result["sector"] or result["industry"]:
+                    results[sym] = result
+                else:
+                    errors += 1
+
+                if done_count % BATCH == 0 or done_count == total:
+                    yield event(
+                        f"  ↳ Fetched {done_count}/{total} — "
+                        f"{len(results)} with classification, {errors} without"
+                    )
+
+        yield event(f"✅ Classification fetch complete — {len(results)}/{total} stocks classified")
+
+        # ── Step 4: Batch update sector & industry ──────────────────────────
+        yield event("💾 Writing sector & industry to database...")
+        try:
+            conn = get_db_connection()
+            cur  = conn.cursor()
+
+            update_rows = [
+                (r["sector"], r["industry"], f"NSE:{sym}-EQ",
+                 f"NSE:{sym}-BE", f"NSE:{sym}-BZ")
+                for sym, r in results.items()
+            ]
+
+            # Update all series variants for the same symbol in one pass
+            for sector, industry, eq_sym, be_sym, bz_sym in update_rows:
+                cur.execute("""
+                    UPDATE stocks SET sector = %s, industry = %s
+                    WHERE fyers_symbol IN (%s, %s, %s)
+                      AND (sector IS NULL OR sector = '' OR sector != %s OR industry != %s)
+                """, (sector, industry, eq_sym, be_sym, bz_sym, sector, industry))
+
+            conn.commit()
+            updated = len(update_rows)
+            cur.close()
+            conn.close()
+        except Exception as e:
+            yield event(f"❌ Failed to write classifications to DB: {e}", done=True)
+            return
+
+        yield event(f"✅ {updated} stocks updated with sector & industry")
+        yield event(
+            f"🎉 Refresh complete — {total} stocks synced, "
+            f"{updated} classified, {deleted} delisted removed.",
+            done=True
+        )
+
+    return StreamingResponse(run(), media_type="text/event-stream")
+
 
 # 🚀 NEW: Secure GitHub Trigger Endpoint
 @app.post("/api/trigger-scan")

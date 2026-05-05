@@ -14,9 +14,10 @@ function App() {
   const [theme, setTheme] = useState('light');
   
   const [activeChart, setActiveChart] = useState(null);
-  
-  // 🚀 NEW: State for the manual trigger button
+
   const [triggerStatus, setTriggerStatus] = useState('idle'); // idle, loading, success, error
+  const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle'); // idle, loading, success, error
+  const [refreshLog, setRefreshLog] = useState([]);
 
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
@@ -87,6 +88,31 @@ function App() {
       setTriggerStatus('error');
       setTimeout(() => setTriggerStatus('idle'), 4000);
     });
+  };
+
+  const handleRefreshNseTickers = () => {
+    setRefreshTickerStatus('loading');
+    setRefreshLog([]);
+
+    const es = new EventSource('https://algo-scanner-lnck.onrender.com/api/refresh-nse-tickers');
+
+    es.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        setRefreshLog(prev => [...prev, payload.message]);
+        if (payload.done) {
+          es.close();
+          const isError = payload.message.startsWith('❌');
+          setRefreshTickerStatus(isError ? 'error' : 'success');
+        }
+      } catch (_) {}
+    };
+
+    es.onerror = () => {
+      es.close();
+      setRefreshLog(prev => [...prev, '❌ Connection lost. Refresh may have failed.']);
+      setRefreshTickerStatus('error');
+    };
   };
 
   const handleExportCSV = () => {
@@ -207,6 +233,7 @@ function App() {
             <button onClick={() => setActiveView('scanner')} style={{...tabStyle, backgroundColor: activeView === 'scanner' ? t.bgPanel : 'transparent', color: activeView === 'scanner' ? t.textMain : t.textMuted}}>📊 Scanner</button>
             <button onClick={() => setActiveView('heatmap')} style={{...tabStyle, backgroundColor: activeView === 'heatmap' ? t.bgPanel : 'transparent', color: activeView === 'heatmap' ? t.textMain : t.textMuted}}>🔥 Sectors</button>
             <button onClick={() => setActiveView('industries')} style={{...tabStyle, backgroundColor: activeView === 'industries' ? t.bgPanel : 'transparent', color: activeView === 'industries' ? t.textMain : t.textMuted}}>🏭 Industries</button>
+            <button onClick={() => setActiveView('settings')} style={{...tabStyle, backgroundColor: activeView === 'settings' ? t.bgPanel : 'transparent', color: activeView === 'settings' ? t.textMain : t.textMuted}}>⚙️ Settings</button>
           </div>
         </div>
         
@@ -408,9 +435,82 @@ function App() {
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
           <SectorHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
         </div>
-      ) : (
+      ) : activeView === 'industries' ? (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
           <IndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, padding: '40px' }}>
+          <div style={{ maxWidth: '600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '800', color: t.textMain }}>Settings</h2>
+
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>NSE Stock Universe</div>
+                <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
+                  Downloads all listed stocks from NSE's official <strong>EQUITY_L.csv</strong>, fetches sector &amp; industry classification for each via NSE API (multithreaded), and syncs everything to the database. Delisted stocks are removed automatically. Run once a month.
+                </div>
+              </div>
+
+              <button
+                onClick={handleRefreshNseTickers}
+                disabled={refreshTickerStatus === 'loading'}
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: refreshTickerStatus === 'loading' ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
+                  backgroundColor:
+                    refreshTickerStatus === 'loading' ? '#eab308' :
+                    refreshTickerStatus === 'success' ? '#10b981' :
+                    refreshTickerStatus === 'error'   ? '#ef4444' :
+                    t.btnPrimaryBg,
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                {refreshTickerStatus === 'idle'    && 'Refresh NSE Tickers'}
+                {refreshTickerStatus === 'loading' && '⏳ Running...'}
+                {refreshTickerStatus === 'success' && '✅ Done'}
+                {refreshTickerStatus === 'error'   && '❌ Failed — Retry'}
+              </button>
+
+              {refreshLog.length > 0 && (
+                <div style={{
+                  backgroundColor: theme === 'dark' ? '#020617' : '#0f172a',
+                  borderRadius: '8px',
+                  padding: '14px 16px',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  lineHeight: '1.8',
+                  maxHeight: '320px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '2px',
+                }}>
+                  {refreshLog.map((line, i) => (
+                    <div key={i} style={{
+                      color: line.startsWith('❌') ? '#f87171'
+                           : line.startsWith('✅') || line.startsWith('🎉') ? '#4ade80'
+                           : line.startsWith('🔍') || line.startsWith('💾') || line.startsWith('📥') ? '#60a5fa'
+                           : line.startsWith('  ↳') ? '#94a3b8'
+                           : '#e2e8f0'
+                    }}>{line}</div>
+                  ))}
+                  {refreshTickerStatus === 'loading' && (
+                    <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
