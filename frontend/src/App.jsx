@@ -92,27 +92,56 @@ function App() {
 
   const handleRefreshNseTickers = () => {
     setRefreshTickerStatus('loading');
-    setRefreshLog([]);
+    setRefreshLog(['🚀 Triggering NSE Ticker Refresh on GitHub Actions...']);
 
-    const es = new EventSource('https://algo-scanner-lnck.onrender.com/api/refresh-nse-tickers');
-
-    es.onmessage = (e) => {
-      try {
-        const payload = JSON.parse(e.data);
-        setRefreshLog(prev => [...prev, payload.message]);
-        if (payload.done) {
-          es.close();
-          const isError = payload.message.startsWith('❌');
-          setRefreshTickerStatus(isError ? 'error' : 'success');
+    fetch('https://algo-scanner-lnck.onrender.com/api/refresh-nse-tickers', { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status !== 'triggered') {
+          setRefreshLog(prev => [...prev, `❌ ${data.message}`]);
+          setRefreshTickerStatus('error');
+          return;
         }
-      } catch (_) {}
-    };
+        setRefreshLog(prev => [...prev, '✅ Workflow triggered — GitHub Actions is now running...', '  ↳ This takes ~10-12 minutes. Status updates every 15s.']);
+        pollRefreshStatus();
+      })
+      .catch(err => {
+        setRefreshLog(prev => [...prev, `❌ Network error: ${err.message}`]);
+        setRefreshTickerStatus('error');
+      });
+  };
 
-    es.onerror = () => {
-      es.close();
-      setRefreshLog(prev => [...prev, '❌ Connection lost. Refresh may have failed.']);
-      setRefreshTickerStatus('error');
-    };
+  const pollRefreshStatus = () => {
+    const interval = setInterval(() => {
+      fetch('https://algo-scanner-lnck.onrender.com/api/refresh-nse-status')
+        .then(res => res.json())
+        .then(data => {
+          const statusLine = `  ↳ Status: ${data.status}${data.conclusion ? ' → ' + data.conclusion : ''}`;
+          setRefreshLog(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.startsWith('  ↳ Status:')) {
+              return [...prev.slice(0, -1), statusLine];
+            }
+            return [...prev, statusLine];
+          });
+
+          if (data.status === 'completed') {
+            clearInterval(interval);
+            if (data.conclusion === 'success') {
+              setRefreshTickerStatus('success');
+              const logLines = data.log_lines || [];
+              if (logLines.length > 0) {
+                setRefreshLog(prev => [...prev, '📄 Summary from GitHub Actions:', ...logLines.map(l => `  ${l}`)]);
+              }
+              setRefreshLog(prev => [...prev, '🎉 Done! Reload the scanner to see updated stocks.']);
+            } else {
+              setRefreshTickerStatus('error');
+              setRefreshLog(prev => [...prev, `❌ Workflow failed (${data.conclusion}). Check GitHub Actions for details.`, `  🔗 ${data.url}`]);
+            }
+          }
+        })
+        .catch(() => {});
+    }, 15000);
   };
 
   const handleExportCSV = () => {

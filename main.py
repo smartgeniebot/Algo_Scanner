@@ -1,6 +1,6 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse  # kept for future use
 from pydantic import BaseModel
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
@@ -185,136 +185,84 @@ async def get_industry_heatmap():
 
 
 
-@app.get("/api/refresh-nse-tickers")
+@app.post("/api/refresh-nse-tickers")
 async def refresh_nse_tickers():
-    """
-    Triggers the NSE Ticker Refresh GitHub Actions workflow,
-    then polls its status and streams log lines back as SSE.
-    The actual CSV fetch + classification runs on GitHub's servers
-    (not blocked by NSE), writing results directly to Neon DB.
-    """
+    """Trigger the NSE Ticker Refresh GitHub Actions workflow and return immediately."""
+    token    = os.environ.get("GITHUB_TOKEN")
+    repo     = os.environ.get("GITHUB_REPO")
+    workflow = "ticker_refresh.yml"
 
-    def event(msg: str, done: bool = False) -> str:
-        return f"data: {json.dumps({'message': msg, 'done': done})}\n\n"
+    if not token or not repo:
+        return {"status": "error", "message": "Server missing GITHUB_TOKEN or GITHUB_REPO env vars"}
 
-    def run():
-        token    = os.environ.get("GITHUB_TOKEN")
-        repo     = os.environ.get("GITHUB_REPO")
-        workflow = "ticker_refresh.yml"
+    gh_headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
 
-        if not token or not repo:
-            yield event("❌ Server missing GITHUB_TOKEN or GITHUB_REPO env vars.", done=True)
-            return
+    trigger_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
+    resp = requests.post(trigger_url, headers=gh_headers, json={"ref": "main"}, timeout=15)
 
-        gh_headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github.v3+json",
-        }
+    if resp.status_code != 204:
+        return {"status": "error", "message": f"GitHub error: {resp.text}"}
 
-        # ── Trigger the workflow ────────────────────────────────────────────
-        yield event("🚀 Triggering NSE Ticker Refresh on GitHub Actions...")
-        trigger_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
-        trigger_time = time.time()
+    return {"status": "triggered"}
 
-        resp = requests.post(trigger_url, headers=gh_headers, json={"ref": "main"}, timeout=15)
-        if resp.status_code != 204:
-            yield event(f"❌ Failed to trigger workflow: {resp.text}", done=True)
-            return
 
-        yield event("✅ Workflow triggered — waiting for GitHub Actions to pick it up...")
-        time.sleep(5)  # give GitHub a moment to register the run
+@app.get("/api/refresh-nse-status")
+async def refresh_nse_status():
+    """Return the status of the most recent NSE Ticker Refresh workflow run."""
+    token    = os.environ.get("GITHUB_TOKEN")
+    repo     = os.environ.get("GITHUB_REPO")
+    workflow = "ticker_refresh.yml"
 
-        # ── Find the run that was just created ─────────────────────────────
-        runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs"
-        run_id   = None
+    if not token or not repo:
+        return {"status": "error", "message": "Server missing GITHUB_TOKEN or GITHUB_REPO env vars"}
 
-        for _ in range(12):   # up to 60s to find the run
-            r = requests.get(runs_url, headers=gh_headers, timeout=10)
-            runs = r.json().get("workflow_runs", [])
-            for run in runs:
-                created = run.get("created_at", "")
-                # pick the most recent run created after we triggered
-                if run["status"] in ("queued", "in_progress", "completed"):
-                    run_id = run["id"]
-                    break
-            if run_id:
-                break
-            time.sleep(5)
+    gh_headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
 
-        if not run_id:
-            yield event("❌ Could not find the triggered workflow run.", done=True)
-            return
+    runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?per_page=1"
+    r = requests.get(runs_url, headers=gh_headers, timeout=10)
+    runs = r.json().get("workflow_runs", [])
 
-        run_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
-        yield event(f"📋 Workflow run #{run_id} found — monitoring progress...")
+    if not runs:
+        return {"status": "none"}
 
-        # ── Poll until complete ─────────────────────────────────────────────
-        last_status   = None
-        elapsed_ticks = 0
+    run = runs[0]
+    result = {
+        "status":     run.get("status"),        # queued | in_progress | completed
+        "conclusion": run.get("conclusion"),    # success | failure | None
+        "run_id":     run.get("id"),
+        "started_at": run.get("run_started_at"),
+        "updated_at": run.get("updated_at"),
+        "url":        run.get("html_url"),
+    }
 
-        while True:
-            time.sleep(10)
-            elapsed_ticks += 1
-            r      = requests.get(run_url, headers=gh_headers, timeout=10)
-            data   = r.json()
-            status = data.get("status")
-            conclusion = data.get("conclusion")
+    # If completed successfully, fetch key log lines
+    if run.get("status") == "completed" and run.get("conclusion") == "success":
+        log_url = f"https://api.github.com/repos/{repo}/actions/runs/{run['id']}/logs"
+        log_r   = requests.get(log_url, headers=gh_headers, timeout=20, allow_redirects=True)
+        lines   = []
+        if log_r.status_code == 200:
+            try:
+                with zipfile.ZipFile(io.BytesIO(log_r.content)) as zf:
+                    for name in zf.namelist():
+                        content = zf.read(name).decode("utf-8", errors="ignore")
+                        for line in content.splitlines():
+                            stripped = line.split("Z ")[-1].strip()
+                            if any(k in stripped for k in (
+                                "stocks loaded", "Upserted", "Removed",
+                                "classified", "Refresh Complete", "failed", "Error", "✅", "❌"
+                            )):
+                                lines.append(stripped)
+            except Exception:
+                pass
+        result["log_lines"] = lines
 
-            if status != last_status:
-                yield event(f"  ↳ Status: {status}" + (f" → {conclusion}" if conclusion else ""))
-                last_status = status
-
-            if elapsed_ticks % 3 == 0:
-                elapsed_min = (elapsed_ticks * 10) // 60
-                elapsed_sec = (elapsed_ticks * 10) % 60
-                yield event(f"  ↳ Still running... ({elapsed_min}m {elapsed_sec}s elapsed)")
-
-            if status == "completed":
-                break
-
-            if elapsed_ticks > 90:   # 15 min hard timeout
-                yield event("❌ Timed out waiting for workflow (>15 min).", done=True)
-                return
-
-        # ── Fetch and stream the job logs ───────────────────────────────────
-        if conclusion == "success":
-            yield event("✅ GitHub Actions workflow completed successfully!")
-
-            # Pull the job logs to show what was synced
-            jobs_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
-            jobs_r   = requests.get(jobs_url, headers=gh_headers, timeout=10)
-            jobs     = jobs_r.json().get("jobs", [])
-            for job in jobs:
-                for step in job.get("steps", []):
-                    name       = step.get("name", "")
-                    step_conc  = step.get("conclusion", "")
-                    yield event(f"  ↳ Step '{name}': {step_conc}")
-
-            # Fetch log lines containing our summary output
-            log_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/logs"
-            log_r   = requests.get(log_url, headers=gh_headers, timeout=20, allow_redirects=True)
-            if log_r.status_code == 200:
-                # Logs come as a zip; parse key summary lines only
-                try:
-                    with zipfile.ZipFile(io.BytesIO(log_r.content)) as zf:
-                        for name in zf.namelist():
-                            content = zf.read(name).decode("utf-8", errors="ignore")
-                            for line in content.splitlines():
-                                stripped = line.split("Z ")[-1].strip()  # strip timestamp
-                                if any(k in stripped for k in (
-                                    "stocks loaded", "Upserted", "Removed",
-                                    "classified", "Refresh Complete", "failed", "Error"
-                                )):
-                                    yield event(f"  📄 {stripped}")
-                except Exception:
-                    pass
-
-            yield event("🎉 NSE tickers fully refreshed. Reload the scanner to see updated stocks.", done=True)
-
-        else:
-            yield event(f"❌ Workflow ended with conclusion: {conclusion}", done=True)
-
-    return StreamingResponse(run(), media_type="text/event-stream")
+    return result
 
 
 # 🚀 NEW: Secure GitHub Trigger Endpoint
