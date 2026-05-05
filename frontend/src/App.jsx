@@ -95,18 +95,17 @@ function App() {
     setRefreshLog([]);
     const log = (msg) => setRefreshLog(prev => [...prev, msg]);
 
-    // ── Step 1: Trigger GitHub Actions to sync stock list ──────────────────
-    log('🚀 Step 1/3: Syncing stock list via GitHub Actions...');
+    log('🚀 Triggering stock list sync via GitHub Actions...');
     try {
       const r = await fetch('https://algo-scanner-lnck.onrender.com/api/refresh-nse-tickers', { method: 'POST' });
       const d = await r.json();
       if (d.status !== 'triggered') { log(`❌ ${d.message}`); setRefreshTickerStatus('error'); return; }
     } catch (e) { log(`❌ Network error: ${e.message}`); setRefreshTickerStatus('error'); return; }
 
-    log('  ↳ Workflow triggered — waiting for GitHub Actions to sync stock list...');
+    log('  ↳ Workflow triggered — polling every 15s...');
 
-    // Poll until GitHub Actions completes
-    const waitForActions = () => new Promise((resolve, reject) => {
+    // Poll GitHub Actions until complete
+    await new Promise((resolve, reject) => {
       const interval = setInterval(async () => {
         try {
           const r = await fetch('https://algo-scanner-lnck.onrender.com/api/refresh-nse-status');
@@ -114,96 +113,18 @@ function App() {
           log(`  ↳ GitHub Actions: ${d.status}${d.conclusion ? ' → ' + d.conclusion : ''}`);
           if (d.status === 'completed') {
             clearInterval(interval);
-            d.conclusion === 'success' ? resolve() : reject(new Error(`Workflow ${d.conclusion}`));
+            d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
           }
         } catch (_) {}
       }, 15000);
+    }).then(() => {
+      log('✅ Stock list & classifications synced to DB successfully!');
+      log('🎉 Refresh complete! Reload the scanner to see updated data.');
+      setRefreshTickerStatus('success');
+    }).catch((e) => {
+      log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      setRefreshTickerStatus('error');
     });
-
-    try {
-      await waitForActions();
-      log('✅ Stock list synced to DB successfully');
-    } catch (e) {
-      log(`❌ GitHub Actions failed: ${e.message}`); setRefreshTickerStatus('error'); return;
-    }
-
-    // ── Step 2: Browser fetches sector/industry directly from NSE ──────────
-    log('🔍 Step 2/3: Fetching sector & industry from NSE (browser fetch)...');
-
-    // First get stock list from our DB to know which symbols to fetch
-    let symbols = [];
-    try {
-      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/filters');
-      // We need all symbols — use a dedicated lightweight endpoint
-      // Fall back: fetch the NSE CSV directly from browser (not blocked)
-      const csvR = await fetch('https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv');
-      const csvText = await csvR.text();
-      const lines = csvText.trim().split('\n').slice(1); // skip header
-      symbols = lines.map(line => line.split(',')[0].trim()).filter(Boolean);
-      log(`  ↳ ${symbols.length} symbols loaded from NSE CSV`);
-    } catch (e) { log(`❌ Failed to load symbol list: ${e.message}`); setRefreshTickerStatus('error'); return; }
-
-    // Fetch NSE session cookie via a no-cors preflight to nseindia.com
-    // Then fetch quote-equity for each symbol with a small delay
-    const classifications = [];
-    const BATCH_SIZE = 10;
-    const DELAY_MS = 300;
-    let done = 0, failed = 0;
-
-    const fetchOne = async (symbol) => {
-      try {
-        const r = await fetch(`https://www.nseindia.com/api/quote-equity?symbol=${symbol}`, {
-          headers: { 'Accept': 'application/json' },
-          credentials: 'include',
-        });
-        if (r.ok) {
-          const data = await r.json();
-          const info = data?.industryInfo || {};
-          if (info.sector || info.industry) {
-            classifications.push({ symbol, sector: info.sector || '', industry: info.industry || '' });
-            return true;
-          }
-        }
-      } catch (_) {}
-      return false;
-    };
-
-    // Process in batches
-    for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
-      const batch = symbols.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map(fetchOne));
-      done += batch.length;
-      failed += results.filter(r => !r).length;
-      if (done % 100 === 0 || done === symbols.length) {
-        log(`  ↳ ${done}/${symbols.length} fetched — ${classifications.length} classified, ${failed} failed`);
-      }
-      await new Promise(res => setTimeout(res, DELAY_MS));
-    }
-
-    log(`✅ Classification complete — ${classifications.length}/${symbols.length} stocks classified`);
-
-    if (classifications.length === 0) {
-      log('❌ No classifications fetched. NSE may be blocking browser requests. Try again.');
-      setRefreshTickerStatus('error'); return;
-    }
-
-    // ── Step 3: Send classifications to backend to save ────────────────────
-    log('💾 Step 3/3: Saving sector & industry to database...');
-    try {
-      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/save-classifications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ classifications }),
-      });
-      const d = await r.json();
-      if (d.status === 'success') {
-        log(`✅ ${d.updated} stocks updated in database`);
-        log('🎉 Refresh complete! Reload the scanner to see updated data.');
-        setRefreshTickerStatus('success');
-      } else {
-        log(`❌ Save failed: ${d.message}`); setRefreshTickerStatus('error');
-      }
-    } catch (e) { log(`❌ Save error: ${e.message}`); setRefreshTickerStatus('error'); }
   };
 
   const handleExportCSV = () => {
@@ -539,7 +460,7 @@ function App() {
               <div>
                 <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>NSE Stock Universe</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Downloads all listed stocks from NSE's official <strong>EQUITY_L.csv</strong>, fetches sector &amp; industry classification for each via NSE API (multithreaded), and syncs everything to the database. Delisted stocks are removed automatically. Run once a month.
+                  Syncs all NSE-listed stocks from <strong>EQUITY_L.csv</strong> into the database via GitHub Actions. Sector &amp; industry come from <strong>nse_classifications.json</strong> (run <code>fetch_classifications.py</code> locally once a month and push). Delisted stocks are removed automatically.
                 </div>
               </div>
 
