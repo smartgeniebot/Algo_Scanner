@@ -11,9 +11,8 @@ import io
 import csv
 import time
 import json
+import zipfile
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
 
 app = FastAPI(title="Algo Scanner Cloud API")
 
@@ -183,207 +182,137 @@ async def get_industry_heatmap():
     conn.close()
     return industries
 
-def _fetch_industry_info(symbol: str, session: requests.Session, lock: Lock) -> dict:
-    """Fetch sector and industry for one symbol from NSE quote-equity API."""
-    url = f"https://www.nseindia.com/api/quote-equity?symbol={symbol}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}",
-    }
-    try:
-        with lock:
-            resp = session.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            info = data.get("industryInfo", {})
-            return {
-                "symbol": symbol,
-                "sector": info.get("sector", ""),
-                "industry": info.get("industry", ""),
-            }
-    except Exception:
-        pass
-    return {"symbol": symbol, "sector": "", "industry": ""}
+
 
 
 @app.get("/api/refresh-nse-tickers")
 async def refresh_nse_tickers():
     """
-    Streams progress as Server-Sent Events (SSE).
-    Steps:
-      1. Download EQUITY_L.csv from NSE archives (all stocks, all series).
-      2. Upsert stock list into DB; delete delisted stocks.
-      3. Fetch sector & industry for every symbol in parallel (10 threads).
-      4. Batch-update DB with classification data.
+    Triggers the NSE Ticker Refresh GitHub Actions workflow,
+    then polls its status and streams log lines back as SSE.
+    The actual CSV fetch + classification runs on GitHub's servers
+    (not blocked by NSE), writing results directly to Neon DB.
     """
 
     def event(msg: str, done: bool = False) -> str:
-        payload = json.dumps({"message": msg, "done": done})
-        return f"data: {payload}\n\n"
+        return f"data: {json.dumps({'message': msg, 'done': done})}\n\n"
 
     def run():
-        # ── Step 1: Download EQUITY_L.csv ──────────────────────────────────
-        yield event("📥 Fetching stock list from NSE EQUITY_L.csv...")
+        token    = os.environ.get("GITHUB_TOKEN")
+        repo     = os.environ.get("GITHUB_REPO")
+        workflow = "ticker_refresh.yml"
 
-        nse_csv_url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
-        http_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-site",
-            "Sec-Fetch-User": "?1",
+        if not token or not repo:
+            yield event("❌ Server missing GITHUB_TOKEN or GITHUB_REPO env vars.", done=True)
+            return
+
+        gh_headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.v3+json",
         }
-        session = requests.Session()
-        try:
-            # Hit the main site first to get cookies, then the securities page for correct referer context
-            session.get("https://www.nseindia.com", headers=http_headers, timeout=15)
-            time.sleep(1)
-            session.get("https://www.nseindia.com/market-data/securities-available-for-trading",
-                        headers=http_headers, timeout=15)
-            time.sleep(1)
-            resp = session.get(nse_csv_url, headers=http_headers, timeout=30)
-            resp.raise_for_status()
-        except Exception as e:
-            yield event(f"❌ Failed to fetch EQUITY_L.csv: {e}", done=True)
+
+        # ── Trigger the workflow ────────────────────────────────────────────
+        yield event("🚀 Triggering NSE Ticker Refresh on GitHub Actions...")
+        trigger_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
+        trigger_time = time.time()
+
+        resp = requests.post(trigger_url, headers=gh_headers, json={"ref": "main"}, timeout=15)
+        if resp.status_code != 204:
+            yield event(f"❌ Failed to trigger workflow: {resp.text}", done=True)
             return
 
-        reader = csv.DictReader(io.StringIO(resp.text))
-        stock_list = []
-        for row in reader:
-            symbol    = row.get("SYMBOL", "").strip()
-            name      = row.get("NAME OF COMPANY", "").strip()
-            series    = row.get(" SERIES", "").strip()
-            isin      = row.get(" ISIN NUMBER", "").strip()
-            if not symbol:
-                continue
-            fyers_symbol = f"NSE:{symbol}-{series}"
-            stock_list.append({"symbol": symbol, "name": name, "series": series,
-                                "isin": isin, "fyers_symbol": fyers_symbol})
+        yield event("✅ Workflow triggered — waiting for GitHub Actions to pick it up...")
+        time.sleep(5)  # give GitHub a moment to register the run
 
-        total = len(stock_list)
-        yield event(f"✅ {total} stocks found in EQUITY_L.csv")
+        # ── Find the run that was just created ─────────────────────────────
+        runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs"
+        run_id   = None
 
-        # ── Step 2: Upsert stock list & delete delisted ─────────────────────
-        yield event("💾 Syncing stock list to database...")
-        try:
-            conn = get_db_connection()
-            cur  = conn.cursor()
+        for _ in range(12):   # up to 60s to find the run
+            r = requests.get(runs_url, headers=gh_headers, timeout=10)
+            runs = r.json().get("workflow_runs", [])
+            for run in runs:
+                created = run.get("created_at", "")
+                # pick the most recent run created after we triggered
+                if run["status"] in ("queued", "in_progress", "completed"):
+                    run_id = run["id"]
+                    break
+            if run_id:
+                break
+            time.sleep(5)
 
-            cur.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS isin TEXT;")
-            cur.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS series TEXT;")
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint WHERE conname = 'stocks_fyers_symbol_key'
-                    ) THEN
-                        ALTER TABLE stocks ADD CONSTRAINT stocks_fyers_symbol_key UNIQUE (fyers_symbol);
-                    END IF;
-                END $$;
-            """)
-            conn.commit()
-
-            upsert_rows = [(s["name"], s["fyers_symbol"], s["series"], s["isin"]) for s in stock_list]
-            execute_values(cur, """
-                INSERT INTO stocks (stock_name, fyers_symbol, series, isin)
-                VALUES %s
-                ON CONFLICT (fyers_symbol) DO UPDATE SET
-                    stock_name = EXCLUDED.stock_name,
-                    series     = EXCLUDED.series,
-                    isin       = EXCLUDED.isin
-            """, upsert_rows)
-            conn.commit()
-
-            cur.execute("CREATE TEMP TABLE _nse_fresh (fyers_symbol TEXT) ON COMMIT DROP")
-            execute_values(cur, "INSERT INTO _nse_fresh VALUES %s",
-                           [(s["fyers_symbol"],) for s in stock_list])
-            cur.execute("DELETE FROM stocks WHERE fyers_symbol NOT IN (SELECT fyers_symbol FROM _nse_fresh)")
-            deleted = cur.rowcount
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception as e:
-            yield event(f"❌ DB sync failed: {e}", done=True)
+        if not run_id:
+            yield event("❌ Could not find the triggered workflow run.", done=True)
             return
 
-        yield event(f"✅ DB synced — {deleted} delisted stocks removed")
+        run_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
+        yield event(f"📋 Workflow run #{run_id} found — monitoring progress...")
 
-        # ── Step 3: Fetch sector & industry in parallel ─────────────────────
-        yield event(f"🔍 Fetching sector & industry for {total} stocks (10 threads)...")
+        # ── Poll until complete ─────────────────────────────────────────────
+        last_status   = None
+        elapsed_ticks = 0
 
-        # NSE sessions are not thread-safe for cookies; use a shared lock around requests
-        lock        = Lock()
-        results     = {}
-        errors      = 0
-        done_count  = 0
-        BATCH       = 50   # report progress every 50 stocks
-        WORKERS     = 10
-        DELAY       = 0.2  # seconds between requests inside each thread
+        while True:
+            time.sleep(10)
+            elapsed_ticks += 1
+            r      = requests.get(run_url, headers=gh_headers, timeout=10)
+            data   = r.json()
+            status = data.get("status")
+            conclusion = data.get("conclusion")
 
-        def fetch_with_delay(stock):
-            time.sleep(DELAY)
-            return _fetch_industry_info(stock["symbol"], session, lock)
+            if status != last_status:
+                yield event(f"  ↳ Status: {status}" + (f" → {conclusion}" if conclusion else ""))
+                last_status = status
 
-        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            futures = {executor.submit(fetch_with_delay, s): s for s in stock_list}
-            for future in as_completed(futures):
-                done_count += 1
-                result = future.result()
-                sym = result["symbol"]
-                if result["sector"] or result["industry"]:
-                    results[sym] = result
-                else:
-                    errors += 1
+            if elapsed_ticks % 3 == 0:
+                elapsed_min = (elapsed_ticks * 10) // 60
+                elapsed_sec = (elapsed_ticks * 10) % 60
+                yield event(f"  ↳ Still running... ({elapsed_min}m {elapsed_sec}s elapsed)")
 
-                if done_count % BATCH == 0 or done_count == total:
-                    yield event(
-                        f"  ↳ Fetched {done_count}/{total} — "
-                        f"{len(results)} with classification, {errors} without"
-                    )
+            if status == "completed":
+                break
 
-        yield event(f"✅ Classification fetch complete — {len(results)}/{total} stocks classified")
+            if elapsed_ticks > 90:   # 15 min hard timeout
+                yield event("❌ Timed out waiting for workflow (>15 min).", done=True)
+                return
 
-        # ── Step 4: Batch update sector & industry ──────────────────────────
-        yield event("💾 Writing sector & industry to database...")
-        try:
-            conn = get_db_connection()
-            cur  = conn.cursor()
+        # ── Fetch and stream the job logs ───────────────────────────────────
+        if conclusion == "success":
+            yield event("✅ GitHub Actions workflow completed successfully!")
 
-            update_rows = [
-                (r["sector"], r["industry"], f"NSE:{sym}-EQ",
-                 f"NSE:{sym}-BE", f"NSE:{sym}-BZ")
-                for sym, r in results.items()
-            ]
+            # Pull the job logs to show what was synced
+            jobs_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
+            jobs_r   = requests.get(jobs_url, headers=gh_headers, timeout=10)
+            jobs     = jobs_r.json().get("jobs", [])
+            for job in jobs:
+                for step in job.get("steps", []):
+                    name       = step.get("name", "")
+                    step_conc  = step.get("conclusion", "")
+                    yield event(f"  ↳ Step '{name}': {step_conc}")
 
-            # Update all series variants for the same symbol in one pass
-            for sector, industry, eq_sym, be_sym, bz_sym in update_rows:
-                cur.execute("""
-                    UPDATE stocks SET sector = %s, industry = %s
-                    WHERE fyers_symbol IN (%s, %s, %s)
-                      AND (sector IS NULL OR sector = '' OR sector != %s OR industry != %s)
-                """, (sector, industry, eq_sym, be_sym, bz_sym, sector, industry))
+            # Fetch log lines containing our summary output
+            log_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/logs"
+            log_r   = requests.get(log_url, headers=gh_headers, timeout=20, allow_redirects=True)
+            if log_r.status_code == 200:
+                # Logs come as a zip; parse key summary lines only
+                try:
+                    with zipfile.ZipFile(io.BytesIO(log_r.content)) as zf:
+                        for name in zf.namelist():
+                            content = zf.read(name).decode("utf-8", errors="ignore")
+                            for line in content.splitlines():
+                                stripped = line.split("Z ")[-1].strip()  # strip timestamp
+                                if any(k in stripped for k in (
+                                    "stocks loaded", "Upserted", "Removed",
+                                    "classified", "Refresh Complete", "failed", "Error"
+                                )):
+                                    yield event(f"  📄 {stripped}")
+                except Exception:
+                    pass
 
-            conn.commit()
-            updated = len(update_rows)
-            cur.close()
-            conn.close()
-        except Exception as e:
-            yield event(f"❌ Failed to write classifications to DB: {e}", done=True)
-            return
+            yield event("🎉 NSE tickers fully refreshed. Reload the scanner to see updated stocks.", done=True)
 
-        yield event(f"✅ {updated} stocks updated with sector & industry")
-        yield event(
-            f"🎉 Refresh complete — {total} stocks synced, "
-            f"{updated} classified, {deleted} delisted removed.",
-            done=True
-        )
+        else:
+            yield event(f"❌ Workflow ended with conclusion: {conclusion}", done=True)
 
     return StreamingResponse(run(), media_type="text/event-stream")
 
