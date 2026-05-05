@@ -187,7 +187,10 @@ async def get_industry_heatmap():
 
 @app.post("/api/refresh-nse-tickers")
 async def refresh_nse_tickers():
-    """Trigger the NSE Ticker Refresh GitHub Actions workflow and return immediately."""
+    """
+    Step 1: Trigger GitHub Actions to sync the stock list from EQUITY_L.csv into DB.
+    The browser then fetches sector/industry directly from NSE and POSTs to /api/save-classifications.
+    """
     token    = os.environ.get("GITHUB_TOKEN")
     repo     = os.environ.get("GITHUB_REPO")
     workflow = "ticker_refresh.yml"
@@ -199,7 +202,6 @@ async def refresh_nse_tickers():
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.v3+json",
     }
-
     trigger_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
     resp = requests.post(trigger_url, headers=gh_headers, json={"ref": "main"}, timeout=15)
 
@@ -211,58 +213,67 @@ async def refresh_nse_tickers():
 
 @app.get("/api/refresh-nse-status")
 async def refresh_nse_status():
-    """Return the status of the most recent NSE Ticker Refresh workflow run."""
+    """Poll status of the most recent NSE Ticker Refresh GitHub Actions run."""
     token    = os.environ.get("GITHUB_TOKEN")
     repo     = os.environ.get("GITHUB_REPO")
     workflow = "ticker_refresh.yml"
 
     if not token or not repo:
-        return {"status": "error", "message": "Server missing GITHUB_TOKEN or GITHUB_REPO env vars"}
+        return {"status": "error"}
 
     gh_headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.v3+json",
     }
-
-    runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?per_page=1"
-    r = requests.get(runs_url, headers=gh_headers, timeout=10)
+    r    = requests.get(
+        f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?per_page=1",
+        headers=gh_headers, timeout=10
+    )
     runs = r.json().get("workflow_runs", [])
-
     if not runs:
         return {"status": "none"}
 
     run = runs[0]
-    result = {
-        "status":     run.get("status"),        # queued | in_progress | completed
-        "conclusion": run.get("conclusion"),    # success | failure | None
-        "run_id":     run.get("id"),
-        "started_at": run.get("run_started_at"),
-        "updated_at": run.get("updated_at"),
+    return {
+        "status":     run.get("status"),
+        "conclusion": run.get("conclusion"),
         "url":        run.get("html_url"),
     }
 
-    # If completed successfully, fetch key log lines
-    if run.get("status") == "completed" and run.get("conclusion") == "success":
-        log_url = f"https://api.github.com/repos/{repo}/actions/runs/{run['id']}/logs"
-        log_r   = requests.get(log_url, headers=gh_headers, timeout=20, allow_redirects=True)
-        lines   = []
-        if log_r.status_code == 200:
-            try:
-                with zipfile.ZipFile(io.BytesIO(log_r.content)) as zf:
-                    for name in zf.namelist():
-                        content = zf.read(name).decode("utf-8", errors="ignore")
-                        for line in content.splitlines():
-                            stripped = line.split("Z ")[-1].strip()
-                            if any(k in stripped for k in (
-                                "stocks loaded", "Upserted", "Removed",
-                                "classified", "Refresh Complete", "failed", "Error", "✅", "❌"
-                            )):
-                                lines.append(stripped)
-            except Exception:
-                pass
-        result["log_lines"] = lines
 
-    return result
+class ClassificationPayload(BaseModel):
+    classifications: List[dict]   # [{symbol, sector, industry}, ...]
+
+
+@app.post("/api/save-classifications")
+async def save_classifications(payload: ClassificationPayload):
+    """
+    Step 2: Receives sector/industry fetched by the browser directly from NSE,
+    and writes them to the DB. Browser IPs are never blocked by NSE.
+    """
+    if not payload.classifications:
+        return {"status": "error", "message": "No data received"}
+
+    conn = get_db_connection()
+    cur  = conn.cursor()
+    updated = 0
+    for item in payload.classifications:
+        sym      = item.get("symbol", "").strip()
+        sector   = item.get("sector", "").strip()
+        industry = item.get("industry", "").strip()
+        if not sym:
+            continue
+        cur.execute("""
+            UPDATE stocks SET sector = %s, industry = %s
+            WHERE fyers_symbol IN (%s, %s, %s)
+        """, (sector, industry,
+              f"NSE:{sym}-EQ", f"NSE:{sym}-BE", f"NSE:{sym}-BZ"))
+        updated += cur.rowcount
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"status": "success", "updated": updated}
 
 
 # 🚀 NEW: Secure GitHub Trigger Endpoint
