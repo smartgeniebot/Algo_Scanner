@@ -3,11 +3,13 @@ import SectorHeatmap from './components/SectorHeatmap';
 import IndustryHeatmap from './components/IndustryHeatmap';
 import MicroIndustryHeatmap from './components/MicroIndustryHeatmap';
 import StocksDirectory from './components/StocksDirectory';
+import FilterTree from './components/FilterTree';
 
 function App() {
   const [hierarchy, setHierarchy] = useState({});
-  const [selectedIndustries, setSelectedIndustries] = useState([]);
+  const [selectedMicros, setSelectedMicros] = useState(new Set());
   const [selectedFundamentals, setSelectedFundamentals] = useState([]);
+  const [sidebarSearch, setSidebarSearch] = useState('');
   const [stocks, setStocks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: 'rs_score', direction: 'desc' });
@@ -31,44 +33,58 @@ function App() {
       .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
   }, []);
 
-  const handleScan = () => {
-    if (selectedIndustries.length === 0 && selectedFundamentals.length === 0) return;
+  const doScan = (micros, fundamentals) => {
     setLoading(true);
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ industries: selectedIndustries, fundamentals: selectedFundamentals })
+      body: JSON.stringify({ industries: [], basic_industries: [...micros], fundamentals })
     }).then(res => res.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
   };
 
+  const handleScan = () => {
+    if (selectedMicros.size === 0 && selectedFundamentals.length === 0) return;
+    doScan(selectedMicros, selectedFundamentals);
+  };
+
   const triggerScanFromHeatmap = (industriesToScan) => {
-    setSelectedIndustries(industriesToScan);
+    // Heatmap passes macro industry names — find all micros under them
+    const micros = new Set();
+    Object.values(hierarchy).forEach(macros =>
+      Object.entries(macros).forEach(([macro, microList]) => {
+        if (industriesToScan.includes(macro)) microList.forEach(mi => micros.add(mi));
+      })
+    );
+    setSelectedMicros(micros);
     setActiveView('scanner');
-    setActiveChart(null); // 🛡️ HIDDEN BUG FIX: Clears the chart so you don't look at a stale stock
+    setActiveChart(null);
     setLoading(true);
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ industries: industriesToScan, fundamentals: selectedFundamentals })
+      body: JSON.stringify({ industries: industriesToScan, basic_industries: [], fundamentals: selectedFundamentals })
     }).then(res => res.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
   };
 
   const handleSelectAll = () => {
-    // 🛡️ FIX: Now selects both all industries and all fundamentals
-    setSelectedIndustries(Object.values(hierarchy).flat());
+    const all = new Set();
+    Object.values(hierarchy).forEach(macros =>
+      Object.values(macros).forEach(micros => micros.forEach(mi => all.add(mi)))
+    );
+    setSelectedMicros(all);
     setSelectedFundamentals(['high_growth', 'moderate_growth']);
   };
-  
+
   const handleClear = () => {
-    setSelectedIndustries([]);
-    setSelectedFundamentals([]); 
+    setSelectedMicros(new Set());
+    setSelectedFundamentals([]);
     setStocks([]);
-    setSearchTerm(''); 
-    setActiveChart(null); 
+    setSearchTerm('');
+    setActiveChart(null);
   };
 
   const handleTriggerEngine = async () => {
@@ -242,18 +258,18 @@ function App() {
   const handleExportCSV = () => {
     if (sortedStocks.length === 0) return;
 
-    const headers = ["Ticker", "Sector", "Industry", "RS Score", "Daily Cross Date", "1H Pullback Time", "15M Pullback Time"];
+    const headers = ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "Daily Cross Date", "1H Pullback Time", "15M Pullback Time"];
     
     const csvRows = sortedStocks.map(stock => {
-      const cleanSymbol = stock.fyers_symbol ? stock.fyers_symbol.split(':')[1].replace('-EQ','') : '--';
-      const mappedSector = Object.keys(hierarchy).find(sector => 
-        hierarchy[sector].includes(stock.industry)
+      const cleanSymbol = stock.fyers_symbol ? stock.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '--';
+      const mappedSector = Object.keys(hierarchy).find(sector =>
+        Object.keys(hierarchy[sector] || {}).includes(stock.industry)
       ) || '--';
-      
       return [
         cleanSymbol,
         `"${mappedSector}"`,
         `"${stock.industry || '--'}"`,
+        `"${stock.basic_industry || '--'}"`,
         stock.rs_score !== null ? stock.rs_score : '--',
         stock.daily_cross_date || '--',
         stock.first_1h_cross_time || '--',
@@ -345,7 +361,7 @@ function App() {
   const gridRowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center' };
   const headerSortStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
   const tabStyle = { padding: '6px 16px', borderRadius: '6px', border: 'none', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' }; 
-  const isScanDisabled = selectedIndustries.length === 0 && selectedFundamentals.length === 0;
+  const isScanDisabled = selectedMicros.size === 0 && selectedFundamentals.length === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden', fontFamily: 'Inter, sans-serif', backgroundColor: t.bgApp, color: t.textMain, transition: 'background-color 0.3s' }}>
@@ -393,51 +409,52 @@ function App() {
               </div>
             </div>
             
-            <div style={{ flex: 1, overflow: 'auto' }}>
-              
-              <div style={{ padding: '15px', borderBottom: `2px solid ${t.border}`, backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc' }}>
-                <div style={{ fontWeight: '800', fontSize: '12px', color: t.textMuted, textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>Fundamental Filters</div>
-                
-                {/* 🛡️ UI FIX: Font size and weight perfectly mirror the sector checkboxes */}
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', marginBottom: '10px' }}>
-                  <input 
-                    type="checkbox" 
-                    style={{ accentColor: t.btnPrimaryBg }} 
-                    checked={selectedFundamentals.includes('high_growth')}
-                    onChange={() => setSelectedFundamentals(prev => prev.includes('high_growth') ? prev.filter(x => x !== 'high_growth') : [...prev, 'high_growth'])} 
-                  /> 
+            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+
+              {/* Fundamental Filters */}
+              <div style={{ padding: '12px 14px', borderBottom: `1px solid ${t.border}`, backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc', flexShrink: 0 }}>
+                <div style={{ fontWeight: '800', fontSize: '11px', color: t.textMuted, textTransform: 'uppercase', marginBottom: '10px', letterSpacing: '0.5px' }}>Fundamentals</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', marginBottom: '8px', color: t.textMain }}>
+                  <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedFundamentals.includes('high_growth')}
+                    onChange={() => setSelectedFundamentals(prev => prev.includes('high_growth') ? prev.filter(x => x !== 'high_growth') : [...prev, 'high_growth'])} />
                   🚀 High Growth (ROCE)
                 </label>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', marginBottom: '8px' }}>
-                  <input 
-                    type="checkbox" 
-                    style={{ accentColor: t.btnPrimaryBg }} 
-                    checked={selectedFundamentals.includes('moderate_growth')}
-                    onChange={() => setSelectedFundamentals(prev => prev.includes('moderate_growth') ? prev.filter(x => x !== 'moderate_growth') : [...prev, 'moderate_growth'])} 
-                  /> 
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', color: t.textMain }}>
+                  <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedFundamentals.includes('moderate_growth')}
+                    onChange={() => setSelectedFundamentals(prev => prev.includes('moderate_growth') ? prev.filter(x => x !== 'moderate_growth') : [...prev, 'moderate_growth'])} />
                   📈 Moderate Growth (ROCE)
                 </label>
               </div>
 
-              <div style={{ padding: '15px' }}>
-                <div style={{ fontWeight: '800', fontSize: '12px', color: t.textMuted, textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>Sectors & Industries</div>
-                {Object.keys(hierarchy).map(s => (
-                  <div key={s} style={{ marginBottom: '18px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>
-                      <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} onChange={() => {
-                        const inds = hierarchy[s];
-                        const allSel = inds.every(i => selectedIndustries.includes(i));
-                        setSelectedIndustries(prev => allSel ? prev.filter(i => !inds.includes(i)) : [...new Set([...prev, ...inds])]);
-                      }} checked={hierarchy[s]?.every(i => selectedIndustries.includes(i))} /> {s}
-                    </label>
-                    {hierarchy[s].map(i => (
-                      <label key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '24px', marginTop: '6px', fontSize: '13px', color: t.textMuted, cursor: 'pointer' }}>
-                        <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedIndustries.includes(i)} onChange={() => setSelectedIndustries(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i])} /> {i}
-                      </label>
-                    ))}
+              {/* Search + Tree Header */}
+              <div style={{ padding: '10px 14px', borderBottom: `1px solid ${t.border}`, flexShrink: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{ fontWeight: '800', fontSize: '11px', color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Sector / Industry
                   </div>
-                ))}
+                  {selectedMicros.size > 0 && (
+                    <span style={{ fontSize: '11px', fontWeight: '700', color: '#3b82f6' }}>{selectedMicros.size} selected</span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  placeholder="🔍 Search..."
+                  value={sidebarSearch}
+                  onChange={e => setSidebarSearch(e.target.value)}
+                  style={{ width: '100%', padding: '6px 10px', borderRadius: '5px', border: `1px solid ${t.border}`, backgroundColor: t.inputBg, color: t.textMain, fontSize: '12px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              {/* 3-Level Filter Tree */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px' }}>
+                <FilterTree
+                  tree={hierarchy}
+                  selected={selectedMicros}
+                  onChange={setSelectedMicros}
+                  t={t}
+                  theme={theme}
+                  searchTerm={sidebarSearch}
+                />
               </div>
 
             </div>
@@ -469,8 +486,8 @@ function App() {
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                   {loading ? <div style={{textAlign:'center', padding:'60px'}}>Scanning...</div> : 
                     sortedStocks.map((s, idx) => {
-                      const mappedSector = Object.keys(hierarchy).find(sector => hierarchy[sector].includes(s.industry)) || '--';
-                      const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace('-EQ','') : '';
+                      const mappedSector = Object.keys(hierarchy).find(sector => Object.keys(hierarchy[sector] || {}).includes(s.industry)) || '--';
+                      const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
                       const bseSymbol = `BSE:${cleanTicker}`;
                       const isRowActive = activeChart === bseSymbol;
 
@@ -501,8 +518,9 @@ function App() {
                           <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h}/>{formatDT(s.first_1h_cross_time)}</> : "--"}</div>
                           
                           <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
-                            <div style={{ fontSize: '13px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.industry}>{s.industry}</div>
-                            <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>in {mappedSector}</div>
+                            <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
+                            <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>
+                            <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mappedSector}</div>
                           </div>
                         </div>
                       );

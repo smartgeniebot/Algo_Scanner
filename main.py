@@ -27,6 +27,7 @@ app.add_middleware(
 # 🚀 UPGRADED: Added fundamentals to the request model
 class IndustryRequest(BaseModel):
     industries: List[str]
+    basic_industries: Optional[List[str]] = None
     fundamentals: Optional[List[str]] = None
 
 def get_db_connection():
@@ -52,77 +53,75 @@ async def get_stocks_directory():
 @app.get("/api/filters")
 async def get_filters():
     conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor) 
-    
-    # 🛡️ THE FIX: Strictly ignore NULL and empty sectors/industries from the cloud
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
-        SELECT DISTINCT sector, industry 
-        FROM stocks 
-        WHERE sector IS NOT NULL AND sector != '' 
+        SELECT DISTINCT sector, industry, basic_industry
+        FROM stocks
+        WHERE sector IS NOT NULL AND sector != ''
           AND industry IS NOT NULL AND industry != ''
-        ORDER BY sector, industry
+          AND basic_industry IS NOT NULL AND basic_industry != ''
+        ORDER BY sector, industry, basic_industry
     """)
     rows = cursor.fetchall()
-    
     cursor.close()
     conn.close()
-    
-    hierarchy = {}
+
+    # Build 3-level tree: { sector: { macro: [micros] } }
+    tree = {}
     for r in rows:
-        if r["sector"] not in hierarchy: 
-            hierarchy[r["sector"]] = []
-        hierarchy[r["sector"]].append(r["industry"])
-        
-    return {"status": "success", "data": hierarchy}
+        s, m, mi = r["sector"], r["industry"], r["basic_industry"]
+        if s not in tree:
+            tree[s] = {}
+        if m not in tree[s]:
+            tree[s][m] = []
+        if mi not in tree[s][m]:
+            tree[s][m].append(mi)
+
+    return {"status": "success", "data": tree}
 
 @app.post("/api/stocks")
 async def get_stocks(request: IndustryRequest):
-    # 🚀 UPGRADED: Allow scanning if EITHER industries OR fundamentals are selected
-    if not request.industries and not request.fundamentals: 
+    if not request.industries and not request.basic_industries and not request.fundamentals:
         return {"status": "success", "data": []}
-        
+
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
-    
-    # Base query logic
+
     query_conditions = ["daily_cross_active = 'Yes'"]
     query_params = []
-    
-    # 1. Handle Industry Filters
-    if request.industries:
+
+    # 1. Micro industry filter (basic_industry) takes priority over macro
+    if request.basic_industries:
+        placeholders = ', '.join(['%s'] * len(request.basic_industries))
+        query_conditions.append(f"basic_industry IN ({placeholders})")
+        query_params.extend(request.basic_industries)
+    elif request.industries:
         placeholders = ', '.join(['%s'] * len(request.industries))
         query_conditions.append(f"industry IN ({placeholders})")
         query_params.extend(request.industries)
-        
-    # 2. Handle Fundamental Filters
+
+    # 2. Fundamental filters
     if request.fundamentals:
         fund_conditions = []
         if "high_growth" in request.fundamentals:
             fund_conditions.append("is_high_roce = True")
         if "moderate_growth" in request.fundamentals:
             fund_conditions.append("is_moderate_growth = True")
-            
-        # If any fundamental filters were checked, group them with an OR
-        # Example output: AND (is_high_roce = True OR is_moderate_growth = True)
         if fund_conditions:
             query_conditions.append("(" + " OR ".join(fund_conditions) + ")")
-            
-    # Combine everything into the final SQL string
+
     where_clause = " AND ".join(query_conditions)
-    
-    query = f"""
-        SELECT stock_name, fyers_symbol, industry, daily_cross_date, 
+
+    cursor.execute(f"""
+        SELECT stock_name, fyers_symbol, industry, basic_industry, daily_cross_date,
                first_15m_cross_time, first_1h_cross_time, rs_score
-        FROM stocks 
+        FROM stocks
         WHERE {where_clause}
-    """
-    
-    cursor.execute(query, tuple(query_params))
+    """, tuple(query_params))
     rows = cursor.fetchall()
-    
+
     cursor.close()
     conn.close()
-
     return {"status": "success", "data": [dict(r) for r in rows]}
 
 @app.get("/api/sector-heatmap")
