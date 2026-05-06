@@ -28,11 +28,18 @@ def get_fyers():
 
 # --- 🛡️ THE ANTI-BAN ENGINE ---
 def fetch_safe(fyers_obj, payload):
-    res = fyers_obj.history(data=payload)
-    if isinstance(res, dict) and res.get('s') == 'error' and 'limit' in str(res.get('message')).lower():
-        tqdm.write("⏳ Fyers Speed Limit Hit! Cooling down for 45 seconds...")
-        time.sleep(45)
-        res = fyers_obj.history(data=payload) 
+    for attempt in range(3):
+        res = fyers_obj.history(data=payload)
+        if isinstance(res, dict):
+            if res.get('s') == 'ok' and res.get('candles'):
+                return res
+            if 'limit' in str(res.get('message', '')).lower():
+                tqdm.write("⏳ Fyers Speed Limit Hit! Cooling down for 45 seconds...")
+                time.sleep(45)
+                continue
+        # Transient empty/error — short backoff before retry
+        if attempt < 2:
+            time.sleep(3)
     return res
 
 # --- 🏆 GENERALIZED SCREENER.IN FETCH & UPSERT ENGINE ---
