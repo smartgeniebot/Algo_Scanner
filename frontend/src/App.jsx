@@ -300,8 +300,8 @@ function App() {
     try {
       const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-bhavcopy', { method: 'POST' });
       const d = await r.json();
-      if (d.status !== 'success') { log(`❌ ${d.message}`); setBhavStatus('error'); return; }
-    } catch (e) { log(`❌ Network error: ${e.message}`); setBhavStatus('error'); return; }
+      if (d.status !== 'success') { log(`❌ ${d.message || d.detail || 'Unexpected server response'}`); setBhavStatus('error'); return; }
+    } catch (e) { log(`❌ Network error: ${e?.message || String(e)}`); setBhavStatus('error'); return; }
 
     log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
     let lastId = 0;
