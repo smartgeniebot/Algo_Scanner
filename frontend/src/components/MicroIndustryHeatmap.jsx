@@ -67,15 +67,10 @@ const MicroIndustryHeatmap = ({ onScanNavigate, theme }) => {
         setSelected(prev => prev.includes(name) ? prev.filter(i => i !== name) : [...prev, name]);
     };
 
-    // Micro Industries scan by basic_industry — we pass them as industries to the scanner
-    // The scanner filters by `industry` column; here we remap basic_industry → industry for scanning
     const handleScanNavigate = () => {
         if (selected.length === 0 || !onScanNavigate) return;
-        // Pass selected basic_industry values; backend /api/stocks filters by `industry` column.
-        // We use the parent's industry names from the selected rows for cross-compatibility.
-        const selectedRows = displayData.filter(item => selected.includes(item?.basic_industry));
-        const industries = [...new Set(selectedRows.map(r => r?.industry).filter(Boolean))];
-        if (industries.length > 0) onScanNavigate(industries);
+        // Pass basic_industry values directly so scanner filters by micro industry
+        if (selected.length > 0) onScanNavigate(selected, 'micro');
     };
 
     const selectPerformers = () => {

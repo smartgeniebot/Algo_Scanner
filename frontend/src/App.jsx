@@ -49,25 +49,39 @@ function App() {
     doScan(selectedMicros, selectedFundamentals);
   };
 
-  const triggerScanFromHeatmap = (industriesToScan) => {
-    // Heatmap passes macro industry names — find all micros under them
-    const micros = new Set();
-    Object.values(hierarchy).forEach(macros =>
-      Object.entries(macros).forEach(([macro, microList]) => {
-        if (industriesToScan.includes(macro)) microList.forEach(mi => micros.add(mi));
-      })
-    );
-    setSelectedMicros(micros);
+  const triggerScanFromHeatmap = (itemsToScan, level = 'macro') => {
     setActiveView('scanner');
     setActiveChart(null);
     setLoading(true);
-    fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ industries: industriesToScan, basic_industries: [], fundamentals: selectedFundamentals })
-    }).then(res => res.json())
-      .then(res => { setStocks(res.data || []); setLoading(false); })
-      .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+
+    if (level === 'micro') {
+      // itemsToScan are basic_industry (micro) values — select them directly
+      const micros = new Set(itemsToScan);
+      setSelectedMicros(micros);
+      fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ industries: [], basic_industries: itemsToScan, fundamentals: selectedFundamentals })
+      }).then(res => res.json())
+        .then(res => { setStocks(res.data || []); setLoading(false); })
+        .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+    } else {
+      // itemsToScan are macro industry names — expand to all their micros
+      const micros = new Set();
+      Object.values(hierarchy).forEach(macros =>
+        Object.entries(macros).forEach(([macro, microList]) => {
+          if (itemsToScan.includes(macro)) microList.forEach(mi => micros.add(mi));
+        })
+      );
+      setSelectedMicros(micros);
+      fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ industries: itemsToScan, basic_industries: [], fundamentals: selectedFundamentals })
+      }).then(res => res.json())
+        .then(res => { setStocks(res.data || []); setLoading(false); })
+        .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+    }
   };
 
   const handleSelectAll = () => {

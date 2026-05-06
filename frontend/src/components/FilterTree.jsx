@@ -101,10 +101,7 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
             >
               <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenSectors(prev => ({ ...prev, [sector]: !prev[sector] }));
-                }}
+                onClick={(e) => { e.stopPropagation(); setOpenSectors(prev => ({ ...prev, [sector]: !prev[sector] })); }}
                 style={{ padding: '2px 6px 2px 0', cursor: 'pointer', flexShrink: 0 }}
               >
                 <Chevron open={isOpen} />
@@ -112,12 +109,10 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
               <div
                 onClick={(e) => {
                   e.stopPropagation();
-                  const all = allMicros;
-                  const allSel = all.every(mi => selected.has(mi));
+                  const allSel = allMicros.every(mi => selected.has(mi));
                   const next = new Set(selected);
-                  if (allSel) all.forEach(mi => next.delete(mi));
-                  else all.forEach(mi => next.add(mi));
-                  console.log('[FilterTree] sector toggle', sector, [...next]);
+                  if (allSel) allMicros.forEach(mi => next.delete(mi));
+                  else allMicros.forEach(mi => next.add(mi));
                   onChange(next);
                 }}
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, cursor: 'pointer' }}
@@ -152,10 +147,7 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
             >
               <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenMacros(prev => ({ ...prev, [macroKey]: !prev[macroKey] }));
-                }}
+                onClick={(e) => { e.stopPropagation(); setOpenMacros(prev => ({ ...prev, [macroKey]: !prev[macroKey] })); }}
                 style={{ padding: '2px 6px 2px 0', cursor: 'pointer', flexShrink: 0 }}
               >
                 <Chevron open={isOpen} />
@@ -167,7 +159,6 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
                   const next = new Set(selected);
                   if (allSel) micros.forEach(mi => next.delete(mi));
                   else micros.forEach(mi => next.add(mi));
-                  console.log('[FilterTree] macro toggle', macro, [...next]);
                   onChange(next);
                 }}
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, cursor: 'pointer' }}
@@ -193,7 +184,6 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
                 e.stopPropagation();
                 const next = new Set(selected);
                 next.has(micro) ? next.delete(micro) : next.add(micro);
-                console.log('[FilterTree] micro toggle', micro, [...next]);
                 onChange(next);
               }}
               style={{ ...rowBase, padding: '4px 12px 4px 44px', gap: '7px', cursor: 'pointer', backgroundColor: bg }}
