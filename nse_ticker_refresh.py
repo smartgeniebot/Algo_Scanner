@@ -17,6 +17,7 @@ preventing cascade failures that corrupt 40%+ of results.
 import csv, io, os, time, requests, psycopg2
 from psycopg2.extras import execute_values
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 import threading
 
 NEON_URL        = os.environ["NEON_URL"]
@@ -95,23 +96,30 @@ def worker_fetch(symbols_chunk: list[str]) -> None:
 
         empty = {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
         result = empty
-        try:
-            time.sleep(DELAY)
-            r = session.get(
-                f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
-                headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                info = r.json().get("industryInfo", {})
-                sector         = info.get("sector", "")
-                industry       = info.get("industry", "")
-                basic_industry = info.get("basicIndustry", "")
-                if sector or industry or basic_industry:
-                    result = {"symbol": symbol, "sector": sector,
-                              "industry": industry, "basic_industry": basic_industry}
-        except Exception:
-            pass
+        for attempt in range(3):  # up to 3 attempts per symbol
+            try:
+                time.sleep(DELAY if attempt == 0 else 3.0)  # backoff on retry
+                encoded = quote(symbol, safe="")
+                r = session.get(
+                    f"https://www.nseindia.com/api/quote-equity?symbol={encoded}",
+                    headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{encoded}"},
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    info = r.json().get("industryInfo", {})
+                    sector         = info.get("sector", "")
+                    industry       = info.get("industry", "")
+                    basic_industry = info.get("basicIndustry", "")
+                    if sector or industry or basic_industry:
+                        result = {"symbol": symbol, "sector": sector,
+                                  "industry": industry, "basic_industry": basic_industry}
+                        break  # success — stop retrying
+                # empty or non-200: refresh session before next attempt
+                if attempt < 2:
+                    session = make_session()
+            except Exception:
+                if attempt < 2:
+                    session = make_session()
 
         with _progress_lock:
             _done_count += 1
@@ -195,9 +203,10 @@ def main():
     for sym in test_symbols:
         try:
             time.sleep(DELAY)
+            encoded_sym = quote(sym, safe="")
             r = session.get(
-                f"https://www.nseindia.com/api/quote-equity?symbol={sym}",
-                headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{sym}"},
+                f"https://www.nseindia.com/api/quote-equity?symbol={encoded_sym}",
+                headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{encoded_sym}"},
                 timeout=15,
             )
             info = r.json().get("industryInfo", {}) if r.status_code == 200 else {}
