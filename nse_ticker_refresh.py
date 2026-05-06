@@ -16,13 +16,11 @@ preventing cascade failures that corrupt 40%+ of results.
 
 import csv, io, os, time, requests, psycopg2
 from psycopg2.extras import execute_values
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 
-NEON_URL  = os.environ["NEON_URL"]
-WORKERS   = 10
-DELAY     = 0.3
-BATCH_LOG = 100
+NEON_URL        = os.environ["NEON_URL"]
+DELAY           = 0.6   # seconds between requests — single-threaded, no parallelism
+BATCH_LOG       = 100
+SESSION_REFRESH = 400   # re-init NSE session every N requests to prevent cookie expiry
 
 NSE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -44,34 +42,12 @@ API_HEADERS = {
     "Sec-Fetch-Site": "same-origin",
 }
 
-# Shared mutable session — refreshed when any thread sees 401/403
-_session_lock = threading.Lock()
-_shared_session: requests.Session | None = None
-
-
 def make_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(NSE_HEADERS)
     s.get("https://www.nseindia.com/get-quote/equity/RELIANCE", timeout=15)
     time.sleep(2)
     return s
-
-
-def get_session() -> requests.Session:
-    global _shared_session
-    with _session_lock:
-        if _shared_session is None:
-            _shared_session = make_session()
-        return _shared_session
-
-
-def refresh_session() -> requests.Session:
-    """Re-initialize the shared session. Called when any thread gets 401/403."""
-    global _shared_session
-    with _session_lock:
-        print("      🔄 Session expired — refreshing NSE cookies...")
-        _shared_session = make_session()
-        return _shared_session
 
 
 def fetch_equity_list(session: requests.Session) -> list[dict]:
@@ -96,47 +72,28 @@ def fetch_equity_list(session: requests.Session) -> list[dict]:
     return stocks
 
 
-def fetch_classification(symbol: str) -> dict:
-    """
-    Fetch sector, industry AND basic_industry from NSE in a single API call.
-    Uses the shared session; refreshes it on 401/403 and retries once.
-    """
+def fetch_classification(symbol: str, session: requests.Session) -> dict:
+    """Fetch sector, industry AND basic_industry from NSE in a single API call."""
     empty = {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
-
-    for attempt in range(2):  # try twice: once normally, once after session refresh
-        try:
-            session = get_session()
-            time.sleep(DELAY)
-            r = session.get(
-                f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
-                headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                info = r.json().get("industryInfo", {})
-                sector         = info.get("sector", "")
-                industry       = info.get("industry", "")
-                basic_industry = info.get("basicIndustry", "")
-                if sector or industry or basic_industry:
-                    return {
-                        "symbol": symbol,
-                        "sector": sector,
-                        "industry": industry,
-                        "basic_industry": basic_industry,
-                    }
-                # 200 but empty industryInfo — stock may genuinely have no classification
-                return empty
-            elif r.status_code in (401, 403):
-                # Session cookie expired — refresh and retry
-                if attempt == 0:
-                    refresh_session()
-                    continue
-        except Exception:
-            if attempt == 0:
-                time.sleep(1)
-                continue
-
-    return empty
+    try:
+        time.sleep(DELAY)
+        r = session.get(
+            f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
+            headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            info = r.json().get("industryInfo", {})
+            sector         = info.get("sector", "")
+            industry       = info.get("industry", "")
+            basic_industry = info.get("basicIndustry", "")
+            if sector or industry or basic_industry:
+                return {"symbol": symbol, "sector": sector,
+                        "industry": industry, "basic_industry": basic_industry}
+            return empty  # 200 but stock genuinely has no classification
+        return empty
+    except Exception:
+        return empty
 
 
 def ensure_schema(cur):
@@ -197,12 +154,12 @@ def main():
 
     # ── Init session ─────────────────────────────────────────────
     log_progress("🔄 Initializing NSE session...")
-    get_session()  # warms up the shared session
+    session = make_session()
     log_progress("✅ Session ready")
 
     # ── Step 1: Download stock list ──────────────────────────────
     log_progress("📥 [1/4] Fetching EQUITY_L.csv from NSE archives...")
-    stock_list = fetch_equity_list(get_session())
+    stock_list = fetch_equity_list(session)
     total = len(stock_list)
     log_progress(f"✅ {total} stocks loaded from NSE")
 
@@ -211,7 +168,7 @@ def main():
     test_symbols = ["RELIANCE", "INFY", "HDFCBANK", "TCS", "SBIN"]
     passed = 0
     for sym in test_symbols:
-        r = fetch_classification(sym)
+        r = fetch_classification(sym, session)
         if r["sector"]:
             log_progress(f"  ↳ ✅ {sym}: {r['sector']} / {r['industry']}")
             passed += 1
@@ -249,25 +206,26 @@ def main():
     conn.commit()
     log_progress(f"✅ Upserted {total} stocks | Removed {deleted} delisted")
 
-    # ── Step 3: Fetch classifications in parallel ────────────────
-    log_progress(f"🌐 [3/4] Fetching classifications ({WORKERS} threads, {total} stocks)...")
+    # ── Step 3: Fetch classifications — single-threaded with periodic session refresh ──
+    log_progress(f"🌐 [3/4] Fetching classifications (single-threaded, {total} stocks, ~{int(total * DELAY // 60)} min)...")
     classified = {}
     failed     = 0
-    done_count = 0
 
-    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-        futures = {executor.submit(fetch_classification, s["symbol"]): s["symbol"]
-                   for s in stock_list}
-        for future in as_completed(futures):
-            done_count += 1
-            result = future.result()
-            sym = result["symbol"]
-            if result["sector"] or result["industry"] or result["basic_industry"]:
-                classified[sym] = result
-            else:
-                failed += 1
-            if done_count % BATCH_LOG == 0 or done_count == total:
-                log_progress(f"  ↳ {done_count}/{total} fetched — {len(classified)} classified, {failed} failed")
+    for i, stock in enumerate(stock_list, 1):
+        # Refresh NSE session cookie every SESSION_REFRESH requests
+        if i % SESSION_REFRESH == 0:
+            log_progress(f"  🔄 Refreshing NSE session at stock {i}/{total}...")
+            session = make_session()
+
+        sym = stock["symbol"]
+        result = fetch_classification(sym, session)
+        if result["sector"] or result["industry"] or result["basic_industry"]:
+            classified[sym] = result
+        else:
+            failed += 1
+
+        if i % BATCH_LOG == 0 or i == total:
+            log_progress(f"  ↳ {i}/{total} fetched — {len(classified)} classified, {failed} failed")
 
     log_progress(f"✅ {len(classified)}/{total} stocks classified")
 
