@@ -8,20 +8,21 @@ NSE Ticker Refresh — runs via GitHub Actions.
 
 Root cause fix: Accept-Encoding must be 'gzip, deflate' only.
 Adding 'br' causes NSE to return Brotli which requests cannot decode.
+
+Session fix: NSE cookies expire mid-run (~500-1000 requests). A shared session
+lock lets any thread detect 401/403 and refresh the session before continuing,
+preventing cascade failures that corrupt 40%+ of results.
 """
 
 import csv, io, os, time, requests, psycopg2
 from psycopg2.extras import execute_values
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+import threading
 
 NEON_URL  = os.environ["NEON_URL"]
 WORKERS   = 10
 DELAY     = 0.3
 BATCH_LOG = 100
-
-# Series codes to try in order when the primary series fails for Fyers/NSE lookups
-SERIES_FALLBACK = ["EQ", "BE", "BZ", "SM", "ST", "N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8", "N9"]
 
 NSE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -43,13 +44,34 @@ API_HEADERS = {
     "Sec-Fetch-Site": "same-origin",
 }
 
+# Shared mutable session — refreshed when any thread sees 401/403
+_session_lock = threading.Lock()
+_shared_session: requests.Session | None = None
+
 
 def make_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update(NSE_HEADERS)
-    session.get("https://www.nseindia.com/get-quote/equity/RELIANCE", timeout=15)
+    s = requests.Session()
+    s.headers.update(NSE_HEADERS)
+    s.get("https://www.nseindia.com/get-quote/equity/RELIANCE", timeout=15)
     time.sleep(2)
-    return session
+    return s
+
+
+def get_session() -> requests.Session:
+    global _shared_session
+    with _session_lock:
+        if _shared_session is None:
+            _shared_session = make_session()
+        return _shared_session
+
+
+def refresh_session() -> requests.Session:
+    """Re-initialize the shared session. Called when any thread gets 401/403."""
+    global _shared_session
+    with _session_lock:
+        print("      🔄 Session expired — refreshing NSE cookies...")
+        _shared_session = make_session()
+        return _shared_session
 
 
 def fetch_equity_list(session: requests.Session) -> list[dict]:
@@ -74,68 +96,47 @@ def fetch_equity_list(session: requests.Session) -> list[dict]:
     return stocks
 
 
-def fetch_classification(symbol: str, session: requests.Session) -> dict:
-    """Fetch sector, industry AND basic_industry from NSE in a single API call."""
-    try:
-        time.sleep(DELAY)
-        r = session.get(
-            f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
-            headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            info = r.json().get("industryInfo", {})
-            sector         = info.get("sector", "")
-            industry       = info.get("industry", "")
-            basic_industry = info.get("basicIndustry", "")
-            if sector or industry or basic_industry:
-                return {
-                    "symbol": symbol,
-                    "sector": sector,
-                    "industry": industry,
-                    "basic_industry": basic_industry,
-                }
-    except Exception:
-        pass
-    return {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
-
-
-def fetch_classification_with_retry(symbol: str, primary_series: str, session: requests.Session, conn) -> dict:
+def fetch_classification(symbol: str) -> dict:
     """
-    Try fetching NSE classification. If it fails and the stored series might be wrong,
-    try alternate series codes and save the correct one to DB.
-    Returns the classification dict (sector/industry/basic_industry) plus the working series.
+    Fetch sector, industry AND basic_industry from NSE in a single API call.
+    Uses the shared session; refreshes it on 401/403 and retries once.
     """
-    result = fetch_classification(symbol, session)
-    if result["sector"] or result["industry"] or result["basic_industry"]:
-        return result, primary_series  # primary series works fine
+    empty = {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
 
-    # Primary series failed — try other series codes
-    tried = {primary_series}
-    for alt_series in SERIES_FALLBACK:
-        if alt_series in tried:
-            continue
-        tried.add(alt_series)
-        time.sleep(DELAY)
-        result = fetch_classification(symbol, session)
-        if result["sector"] or result["industry"] or result["basic_industry"]:
-            # Found a working series — persist it in DB
-            try:
-                cur = conn.cursor()
-                new_fyers = f"NSE:{symbol}-{alt_series}"
-                old_fyers = f"NSE:{symbol}-{primary_series}"
-                cur.execute("""
-                    UPDATE stocks SET series = %s, fyers_symbol = %s
-                    WHERE fyers_symbol = %s
-                """, (alt_series, new_fyers, old_fyers))
-                conn.commit()
-                cur.close()
-                print(f"      🔄 Series fix: {symbol} {primary_series}→{alt_series} saved to DB")
-            except Exception as e:
-                print(f"      ⚠️ Could not save series fix for {symbol}: {e}")
-            return result, alt_series
+    for attempt in range(2):  # try twice: once normally, once after session refresh
+        try:
+            session = get_session()
+            time.sleep(DELAY)
+            r = session.get(
+                f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
+                headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                info = r.json().get("industryInfo", {})
+                sector         = info.get("sector", "")
+                industry       = info.get("industry", "")
+                basic_industry = info.get("basicIndustry", "")
+                if sector or industry or basic_industry:
+                    return {
+                        "symbol": symbol,
+                        "sector": sector,
+                        "industry": industry,
+                        "basic_industry": basic_industry,
+                    }
+                # 200 but empty industryInfo — stock may genuinely have no classification
+                return empty
+            elif r.status_code in (401, 403):
+                # Session cookie expired — refresh and retry
+                if attempt == 0:
+                    refresh_session()
+                    continue
+        except Exception:
+            if attempt == 0:
+                time.sleep(1)
+                continue
 
-    return {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}, primary_series
+    return empty
 
 
 def ensure_schema(cur):
@@ -177,7 +178,16 @@ def log_progress(msg: str):
         _log_conn.commit()
         cur.close()
     except Exception as e:
-        print(f"[log_progress error] {e}")
+        # Recover from aborted transaction
+        try:
+            _log_conn.rollback()
+            cur = _log_conn.cursor()
+            cur.execute("INSERT INTO job_progress (job, line) VALUES (%s, %s)",
+                        ("nse_refresh", msg))
+            _log_conn.commit()
+            cur.close()
+        except Exception:
+            print(f"[log_progress error] {e}")
 
 
 def main():
@@ -187,12 +197,12 @@ def main():
 
     # ── Init session ─────────────────────────────────────────────
     log_progress("🔄 Initializing NSE session...")
-    session = make_session()
+    get_session()  # warms up the shared session
     log_progress("✅ Session ready")
 
     # ── Step 1: Download stock list ──────────────────────────────
     log_progress("📥 [1/4] Fetching EQUITY_L.csv from NSE archives...")
-    stock_list = fetch_equity_list(session)
+    stock_list = fetch_equity_list(get_session())
     total = len(stock_list)
     log_progress(f"✅ {total} stocks loaded from NSE")
 
@@ -201,7 +211,7 @@ def main():
     test_symbols = ["RELIANCE", "INFY", "HDFCBANK", "TCS", "SBIN"]
     passed = 0
     for sym in test_symbols:
-        r = fetch_classification(sym, session)
+        r = fetch_classification(sym)
         if r["sector"]:
             log_progress(f"  ↳ ✅ {sym}: {r['sector']} / {r['industry']}")
             passed += 1
@@ -239,17 +249,14 @@ def main():
     conn.commit()
     log_progress(f"✅ Upserted {total} stocks | Removed {deleted} delisted")
 
-    # Build a symbol→series map from the stock list for retry logic
-    symbol_series_map = {s["symbol"]: s["series"] for s in stock_list}
-
-    # ── Step 3: Fetch sector, industry & basic_industry in parallel ──
+    # ── Step 3: Fetch classifications in parallel ────────────────
     log_progress(f"🌐 [3/4] Fetching classifications ({WORKERS} threads, {total} stocks)...")
     classified = {}
     failed     = 0
     done_count = 0
 
     with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-        futures = {executor.submit(fetch_classification, s["symbol"], session): s["symbol"]
+        futures = {executor.submit(fetch_classification, s["symbol"]): s["symbol"]
                    for s in stock_list}
         for future in as_completed(futures):
             done_count += 1
@@ -259,31 +266,13 @@ def main():
                 classified[sym] = result
             else:
                 failed += 1
-                classified[sym] = None  # placeholder for retry
             if done_count % BATCH_LOG == 0 or done_count == total:
-                good = sum(1 for v in classified.values() if v is not None)
-                log_progress(f"  ↳ {done_count}/{total} fetched — {good} classified, {failed} failed")
+                log_progress(f"  ↳ {done_count}/{total} fetched — {len(classified)} classified, {failed} failed")
 
-    # ── Series retry for failed symbols ─────────────────────────
-    failed_symbols = [sym for sym, v in classified.items() if v is None]
-    if failed_symbols:
-        log_progress(f"🔄 Retrying {len(failed_symbols)} failed symbols with alternate series codes...")
-        recovered = 0
-        for sym in failed_symbols:
-            primary = symbol_series_map.get(sym, "EQ")
-            result, working_series = fetch_classification_with_retry(sym, primary, session, conn)
-            if result["sector"] or result["industry"] or result["basic_industry"]:
-                classified[sym] = result
-                recovered += 1
-            else:
-                del classified[sym]
-        log_progress(f"  ↳ Recovered {recovered}/{len(failed_symbols)} via series retry")
-
-    classified = {k: v for k, v in classified.items() if v is not None}
     log_progress(f"✅ {len(classified)}/{total} stocks classified")
 
     # ── Step 4: Write to DB ──────────────────────────────────────
-    log_progress(f"💾 [4/4] Writing classifications to DB...")
+    log_progress("💾 [4/4] Writing classifications to DB...")
     cur = conn.cursor()
     updated = 0
     for sym, info in classified.items():
