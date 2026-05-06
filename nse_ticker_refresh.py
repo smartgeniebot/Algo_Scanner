@@ -304,9 +304,44 @@ def main():
         updated += cur.rowcount
 
     conn.commit()
+
+    # ── Step 5: Normalize sector casing ─────────────────────────
+    # NSE API occasionally returns ALL-CAPS sector names for some stocks.
+    # Map any known bad variants to their correct canonical form.
+    SECTOR_NORMALIZE = {
+        'AUTOMOBILE':          'Automobile and Auto Components',
+        'AUTO':                'Automobile and Auto Components',
+        'CONSTRUCTION':        'Construction',
+        'SERVICES':            'Services',
+        'HEALTHCARE SERVICES': 'Healthcare',
+        'HEALTHCARE':          'Healthcare',
+        'IT':                  'Information Technology',
+        'FMCG':                'Fast Moving Consumer Goods',
+        'METALS & MINING':     'Metals & Mining',
+        'OIL & GAS':           'Oil Gas & Consumable Fuels',
+        'REALTY':              'Realty',
+        'POWER':               'Power',
+        'TELECOM':             'Telecommunication',
+        'MEDIA':               'Media Entertainment & Publication',
+        'CHEMICALS':           'Chemicals',
+        'TEXTILES':            'Textiles',
+        'UTILITIES':           'Utilities',
+        'DIVERSIFIED':         'Diversified',
+    }
+    log_progress("🔧 [5/5] Normalizing sector casing in DB...")
+    normalized = 0
+    for bad, good in SECTOR_NORMALIZE.items():
+        cur = conn.cursor()
+        cur.execute("UPDATE stocks SET sector = %s WHERE sector = %s", (good, bad))
+        if cur.rowcount:
+            log_progress(f"  ↳ Fixed '{bad}' → '{good}' ({cur.rowcount} rows)")
+            normalized += cur.rowcount
+        conn.commit()
+        cur.close()
+
     cur.close()
     conn.close()
-    log_progress(f"✅ {updated} rows updated in DB")
+    log_progress(f"✅ {updated} rows updated in DB | {normalized} sector name(s) normalized")
     log_progress(f"🎉 Done — {total} synced, {len(classified)} classified, {deleted} removed")
 
 
