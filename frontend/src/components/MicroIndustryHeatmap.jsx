@@ -155,7 +155,7 @@ const MicroIndustryHeatmap = ({ onScanNavigate, theme }) => {
 
                 <div style={{ display: 'grid', gridTemplateColumns: gridLayout, gap: '15px', padding: '12px 24px', borderTop: `1px solid ${t.border}`, fontSize: '12px', fontWeight: '700', color: t.textMuted, textTransform: 'uppercase', backgroundColor: t.headerBg }}>
                     <div style={{ textAlign: 'center' }}>✔</div>
-                    <div>Micro Industry & Industry</div>
+                    <div>Micro Industry & Sector</div>
                     <div style={{ textAlign: 'center' }}>Vs Nifty</div>
                     <div>Outperforming Stocks %</div>
                     <div style={{ textAlign: 'center' }}>Conviction</div>
@@ -195,7 +195,7 @@ const MicroIndustryHeatmap = ({ onScanNavigate, theme }) => {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                                 <div style={{ fontWeight: '700', fontSize: '14px', color: t.textMain }}>{title}</div>
                                 <div style={{ fontSize: '11px', color: t.textMuted, fontWeight: '600', textTransform: 'uppercase' }}>
-                                    in {industry} · {sector}
+                                    in {sector}
                                 </div>
                             </div>
 
