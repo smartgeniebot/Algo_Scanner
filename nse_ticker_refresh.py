@@ -46,6 +46,16 @@ API_HEADERS = {
     "Sec-Fetch-Site": "same-origin",
 }
 
+REPLACEMENT_CHAR = '�'
+
+def sanitize(text: str) -> str:
+    """Replace Unicode replacement characters (garbled encoding) with ' & '."""
+    if not text or REPLACEMENT_CHAR not in text:
+        return text
+    import re
+    return re.sub(f'{REPLACEMENT_CHAR}+', ' & ', text).strip()
+
+
 def make_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(NSE_HEADERS)
@@ -107,9 +117,9 @@ def worker_fetch(symbols_chunk: list[str]) -> None:
                 )
                 if r.status_code == 200:
                     info = r.json().get("industryInfo", {})
-                    sector         = info.get("sector", "")
-                    industry       = info.get("industry", "")
-                    basic_industry = info.get("basicIndustry", "")
+                    sector         = sanitize(info.get("sector", ""))
+                    industry       = sanitize(info.get("industry", ""))
+                    basic_industry = sanitize(info.get("basicIndustry", ""))
                     if sector or industry or basic_industry:
                         result = {"symbol": symbol, "sector": sector,
                                   "industry": industry, "basic_industry": basic_industry}
@@ -344,9 +354,10 @@ def main():
         'RESIDENTIAL/COMMERCIAL/SEZ Project': 'Residential Commercial Projects',
     }
 
-    log_progress("🔧 [5/5] Normalizing sector, industry & basic_industry casing in DB...")
+    log_progress("🔧 [5/5] Normalizing sector, industry & basic_industry in DB...")
     normalized = 0
 
+    # Pass 1: Fix known wrong-cased names
     for column, mapping in [('sector', SECTOR_NORMALIZE), ('industry', INDUSTRY_NORMALIZE), ('basic_industry', BASIC_INDUSTRY_NORMALIZE)]:
         for bad, good in mapping.items():
             cur = conn.cursor()
@@ -357,9 +368,27 @@ def main():
             conn.commit()
             cur.close()
 
+    # Pass 2: Fix garbled Unicode replacement characters (U+FFFD) in all classification columns
+    import re
+    REPL = '�'
+    garbled_fixed = 0
+    for column in ['sector', 'industry', 'basic_industry']:
+        cur = conn.cursor()
+        cur.execute(f"SELECT id, {column} FROM stocks WHERE {column} IS NOT NULL AND {column} LIKE %s", (f'%{REPL}%',))
+        rows_to_fix = cur.fetchall()
+        cur.close()
+        for row_id, val in rows_to_fix:
+            fixed = re.sub(f'{REPL}+', ' & ', val).strip()
+            cur = conn.cursor()
+            cur.execute(f"UPDATE stocks SET {column} = %s WHERE id = %s", (fixed, row_id))
+            conn.commit()
+            cur.close()
+            garbled_fixed += 1
+            log_progress(f"  ↳ Fixed garbled {column}: '{fixed}'")
+
     cur.close()
     conn.close()
-    log_progress(f"✅ {updated} rows updated in DB | {normalized} classification name(s) normalized")
+    log_progress(f"✅ {updated} rows updated | {normalized} name(s) normalized | {garbled_fixed} garbled char(s) fixed")
     log_progress(f"🎉 Done — {total} synced, {len(classified)} classified, {deleted} removed")
 
 
