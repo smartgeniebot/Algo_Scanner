@@ -437,7 +437,10 @@ function App() {
                   )}
                 </div>
                 <input
+                  id="sidebar-search"
+                  name="sidebar-search"
                   type="text"
+                  autoComplete="off"
                   placeholder="🔍 Search..."
                   value={sidebarSearch}
                   onChange={e => setSidebarSearch(e.target.value)}
@@ -468,7 +471,7 @@ function App() {
                   <button onClick={handleExportCSV} style={{ padding: '4px 12px', backgroundColor: '#10b981', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>📥 Export CSV</button>
                 )}
               </div>
-              <input type="text" placeholder="🔍 Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '300px', backgroundColor: t.inputBg, color: t.textMain }} />
+              <input id="results-search" name="results-search" type="text" autoComplete="off" placeholder="🔍 Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '300px', backgroundColor: t.inputBg, color: t.textMain }} />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
