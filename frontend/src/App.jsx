@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import SectorHeatmap from './components/SectorHeatmap';
 import IndustryHeatmap from './components/IndustryHeatmap';
+import MicroIndustryHeatmap from './components/MicroIndustryHeatmap';
 
 function App() {
   const [hierarchy, setHierarchy] = useState({});
@@ -102,27 +103,52 @@ function App() {
       if (d.status !== 'triggered') { log(`❌ ${d.message}`); setRefreshTickerStatus('error'); return; }
     } catch (e) { log(`❌ Network error: ${e.message}`); setRefreshTickerStatus('error'); return; }
 
-    log('  ↳ Workflow triggered — polling every 15s...');
+    log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
 
-    // Poll GitHub Actions until complete
+    let lastId = 0;
+
+    // Poll job_progress every 3s for live script output
+    const progressInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/refresh-progress?since_id=${lastId}`);
+        const d = await r.json();
+        if (d.lines && d.lines.length > 0) {
+          d.lines.forEach(({ id, line }) => {
+            log(line);
+            lastId = id;
+          });
+        }
+      } catch (_) {}
+    }, 3000);
+
+    // Poll GitHub Actions status every 15s to detect completion
     await new Promise((resolve, reject) => {
-      const interval = setInterval(async () => {
+      const ghInterval = setInterval(async () => {
         try {
           const r = await fetch('https://algo-scanner-lnck.onrender.com/api/refresh-nse-status');
           const d = await r.json();
-          log(`  ↳ GitHub Actions: ${d.status}${d.conclusion ? ' → ' + d.conclusion : ''}`);
           if (d.status === 'completed') {
-            clearInterval(interval);
-            d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+            clearInterval(ghInterval);
+            // Give progress poller one final pass to catch last lines
+            setTimeout(async () => {
+              try {
+                const r2 = await fetch(`https://algo-scanner-lnck.onrender.com/api/refresh-progress?since_id=${lastId}`);
+                const d2 = await r2.json();
+                if (d2.lines && d2.lines.length > 0) {
+                  d2.lines.forEach(({ line }) => log(line));
+                }
+              } catch (_) {}
+              clearInterval(progressInterval);
+              d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+            }, 4000);
           }
         } catch (_) {}
       }, 15000);
     }).then(() => {
-      log('✅ Stock list & classifications synced to DB successfully!');
-      log('🎉 Refresh complete! Reload the scanner to see updated data.');
       setRefreshTickerStatus('success');
     }).catch((e) => {
       log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      clearInterval(progressInterval);
       setRefreshTickerStatus('error');
     });
   };
@@ -245,6 +271,7 @@ function App() {
             <button onClick={() => setActiveView('scanner')} style={{...tabStyle, backgroundColor: activeView === 'scanner' ? t.bgPanel : 'transparent', color: activeView === 'scanner' ? t.textMain : t.textMuted}}>📊 Scanner</button>
             <button onClick={() => setActiveView('heatmap')} style={{...tabStyle, backgroundColor: activeView === 'heatmap' ? t.bgPanel : 'transparent', color: activeView === 'heatmap' ? t.textMain : t.textMuted}}>🔥 Sectors</button>
             <button onClick={() => setActiveView('industries')} style={{...tabStyle, backgroundColor: activeView === 'industries' ? t.bgPanel : 'transparent', color: activeView === 'industries' ? t.textMain : t.textMuted}}>🏭 Industries</button>
+            <button onClick={() => setActiveView('micro')} style={{...tabStyle, backgroundColor: activeView === 'micro' ? t.bgPanel : 'transparent', color: activeView === 'micro' ? t.textMain : t.textMuted}}>🔬 Micro Industries</button>
             <button onClick={() => setActiveView('settings')} style={{...tabStyle, backgroundColor: activeView === 'settings' ? t.bgPanel : 'transparent', color: activeView === 'settings' ? t.textMain : t.textMuted}}>⚙️ Settings</button>
           </div>
         </div>
@@ -450,6 +477,10 @@ function App() {
       ) : activeView === 'industries' ? (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
           <IndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
+        </div>
+      ) : activeView === 'micro' ? (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
+          <MicroIndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
         </div>
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, padding: '40px' }}>

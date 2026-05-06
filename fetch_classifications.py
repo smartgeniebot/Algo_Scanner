@@ -1,6 +1,6 @@
 """
-Run this locally (not on GitHub Actions) to fetch sector & industry
-from NSE and save to nse_classifications.json.
+Run this locally (not on GitHub Actions) to fetch sector, industry &
+basic_industry from NSE and save to nse_classifications.json.
 
 Usage: python fetch_classifications.py
 Then commit and push nse_classifications.json.
@@ -72,13 +72,18 @@ def fetch_one(symbol):
         )
         if resp.status_code == 200:
             info = resp.json().get("industryInfo", {})
-            return {"symbol": symbol, "sector": info.get("sector",""), "industry": info.get("industry","")}
+            return {
+                "symbol": symbol,
+                "sector": info.get("sector", ""),
+                "industry": info.get("industry", ""),
+                "basic_industry": info.get("basicIndustry", ""),
+            }
         elif resp.status_code in (401, 403):
             # Refresh session on auth errors
             _session = make_session()
     except Exception:
         pass
-    return {"symbol": symbol, "sector": "", "industry": ""}
+    return {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
 
 def main():
     global _session
@@ -93,7 +98,7 @@ def main():
     total   = len(symbols)
     print(f"      ✅ {total} symbols loaded")
 
-    print(f"\n[2/2] Fetching sector & industry ({WORKERS} threads)...")
+    print(f"\n[2/2] Fetching sector, industry & basic_industry ({WORKERS} threads)...")
     results    = {}
     failed     = 0
     done_count = 0
@@ -103,8 +108,12 @@ def main():
         for future in as_completed(futures):
             done_count += 1
             r = future.result()
-            if r["sector"] or r["industry"]:
-                results[r["symbol"]] = {"sector": r["sector"], "industry": r["industry"]}
+            if r["sector"] or r["industry"] or r["basic_industry"]:
+                results[r["symbol"]] = {
+                    "sector": r["sector"],
+                    "industry": r["industry"],
+                    "basic_industry": r["basic_industry"],
+                }
             else:
                 failed += 1
             if done_count % BATCH_LOG == 0 or done_count == total:

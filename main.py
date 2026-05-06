@@ -159,10 +159,9 @@ async def get_sector_heatmap():
 async def get_industry_heatmap():
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
-    
-    # 🛡️ THE FIX: Added 'sector' to the GROUP BY clause for PostgreSQL strictness
+
     industry_query = """
-    SELECT 
+    SELECT
         industry,
         sector,
         COUNT(*) as total_stocks,
@@ -174,13 +173,41 @@ async def get_industry_heatmap():
     GROUP BY industry, sector
     ORDER BY avg_rs DESC
     """
-    
+
     cursor.execute(industry_query)
     industries = [dict(row) for row in cursor.fetchall()]
-    
+
     cursor.close()
     conn.close()
     return industries
+
+
+@app.get("/api/micro-industry-heatmap")
+async def get_micro_industry_heatmap():
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+    query = """
+    SELECT
+        basic_industry,
+        industry,
+        sector,
+        COUNT(*) as total_stocks,
+        ROUND(AVG(rs_score)::numeric, 3) as avg_rs,
+        COUNT(CASE WHEN daily_cross_active = 'Yes' THEN 1 END) as active_crosses,
+        ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(*)) * 100, 2) as outperforming_pct
+    FROM stocks
+    WHERE basic_industry IS NOT NULL AND basic_industry != ''
+    GROUP BY basic_industry, industry, sector
+    ORDER BY avg_rs DESC
+    """
+
+    cursor.execute(query)
+    rows = [dict(row) for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+    return rows
 
 
 
@@ -188,8 +215,8 @@ async def get_industry_heatmap():
 @app.post("/api/refresh-nse-tickers")
 async def refresh_nse_tickers():
     """
-    Step 1: Trigger GitHub Actions to sync the stock list from EQUITY_L.csv into DB.
-    The browser then fetches sector/industry directly from NSE and POSTs to /api/save-classifications.
+    Trigger GitHub Actions to sync the stock list and classifications into DB.
+    Clears the job_progress log so the frontend gets a clean stream.
     """
     token    = os.environ.get("GITHUB_TOKEN")
     repo     = os.environ.get("GITHUB_REPO")
@@ -197,6 +224,23 @@ async def refresh_nse_tickers():
 
     if not token or not repo:
         return {"status": "error", "message": "Server missing GITHUB_TOKEN or GITHUB_REPO env vars"}
+
+    # Clear previous run's progress log
+    try:
+        conn = get_db_connection()
+        cur  = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS job_progress (
+                id SERIAL PRIMARY KEY, job TEXT NOT NULL,
+                line TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("DELETE FROM job_progress WHERE job = 'nse_refresh'")
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
 
     gh_headers = {
         "Authorization": f"Bearer {token}",
@@ -209,6 +253,25 @@ async def refresh_nse_tickers():
         return {"status": "error", "message": f"GitHub error: {resp.text}"}
 
     return {"status": "triggered"}
+
+
+@app.get("/api/refresh-progress")
+async def refresh_progress(since_id: int = 0):
+    """Return new job_progress lines since the given id (for incremental polling)."""
+    try:
+        conn = get_db_connection()
+        cur  = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, line FROM job_progress
+            WHERE job = 'nse_refresh' AND id > %s
+            ORDER BY id ASC
+        """, (since_id,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {"lines": [{"id": r["id"], "line": r["line"]} for r in rows]}
+    except Exception as e:
+        return {"lines": [], "error": str(e)}
 
 
 @app.get("/api/refresh-nse-status")
@@ -258,15 +321,16 @@ async def save_classifications(payload: ClassificationPayload):
     cur  = conn.cursor()
     updated = 0
     for item in payload.classifications:
-        sym      = item.get("symbol", "").strip()
-        sector   = item.get("sector", "").strip()
-        industry = item.get("industry", "").strip()
+        sym            = item.get("symbol", "").strip()
+        sector         = item.get("sector", "").strip()
+        industry       = item.get("industry", "").strip()
+        basic_industry = item.get("basic_industry", "").strip()
         if not sym:
             continue
         cur.execute("""
-            UPDATE stocks SET sector = %s, industry = %s
+            UPDATE stocks SET sector = %s, industry = %s, basic_industry = %s
             WHERE fyers_symbol IN (%s, %s, %s)
-        """, (sector, industry,
+        """, (sector, industry, basic_industry,
               f"NSE:{sym}-EQ", f"NSE:{sym}-BE", f"NSE:{sym}-BZ"))
         updated += cur.rowcount
 
