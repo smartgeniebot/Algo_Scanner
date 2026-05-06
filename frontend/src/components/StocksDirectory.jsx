@@ -158,7 +158,7 @@ export default function StocksDirectory({ theme, t }) {
 
   const clearAll = () => { setFilterSector([]); setFilterMacro([]); setFilterMicro([]); setFilterRS('all'); setSearch(''); };
 
-  const colWidths = '100px 1fr 160px 200px 200px 90px';
+  const colWidths = '100px 220px 160px 200px 220px 80px';
 
   const headerCell = (key, label) => {
     const active = sortKey === key;
