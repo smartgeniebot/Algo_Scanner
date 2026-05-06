@@ -482,6 +482,56 @@ async def intraday_status():
     return _get_workflow_status("intraday_engine.yml")
 
 
+@app.post("/api/trigger-bhavcopy")
+async def trigger_bhavcopy():
+    token = os.environ.get("GITHUB_TOKEN")
+    repo  = os.environ.get("GITHUB_REPO")
+
+    if not token or not repo:
+        return {"status": "error", "message": "Server missing GitHub credentials"}
+
+    _clear_job("bhavcopy")
+
+    response = requests.post(
+        f"https://api.github.com/repos/{repo}/actions/workflows/bhavcopy_engine.yml/dispatches",
+        headers=_gh_headers(), json={"ref": "main"}
+    )
+    if response.status_code == 204:
+        return {"status": "success", "message": "Bhavcopy fetch initiated successfully"}
+    return {"status": "error", "message": f"GitHub Error: {response.text}"}
+
+
+@app.get("/api/bhavcopy-progress")
+async def bhavcopy_progress(since_id: int = 0):
+    return _get_progress("bhavcopy", since_id)
+
+
+@app.get("/api/bhavcopy-status")
+async def bhavcopy_status():
+    return _get_workflow_status("bhavcopy_engine.yml")
+
+
+@app.get("/api/delivery-data")
+async def get_delivery_data(symbol: str):
+    """Returns last 14 days of delivery % for a given NSE symbol (e.g. RELIANCE)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT trade_date, delivery_pct
+            FROM delivery_data
+            WHERE symbol = %s
+            ORDER BY trade_date ASC
+            LIMIT 14
+        """, (symbol.upper(),))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "data": [{"date": str(r["trade_date"]), "pct": float(r["delivery_pct"])} for r in rows]}
+    except Exception as e:
+        return {"status": "error", "data": [], "message": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
     import os

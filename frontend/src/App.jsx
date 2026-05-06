@@ -25,13 +25,35 @@ function App() {
   const [intradayLog, setIntradayLog] = useState([]);
   const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle');
   const [refreshLog, setRefreshLog] = useState([]);
+  const [bhavStatus, setBhavStatus] = useState('idle');
+  const [bhavLog, setBhavLog] = useState([]);
+  const [deliveryCache, setDeliveryCache] = useState({});
 
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
       .then(res => res.json())
-      .then(res => setHierarchy(res.data || {})) 
+      .then(res => setHierarchy(res.data || {}))
       .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
   }, []);
+
+  useEffect(() => {
+    if (stocks.length === 0) return;
+    const tickers = stocks
+      .map(s => s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : null)
+      .filter(Boolean);
+    const uncached = tickers.filter(t => !(t in deliveryCache));
+    if (uncached.length === 0) return;
+    uncached.forEach(ticker => {
+      fetch(`https://algo-scanner-lnck.onrender.com/api/delivery-data?symbol=${ticker}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.status === 'success') {
+            setDeliveryCache(prev => ({ ...prev, [ticker]: d.data }));
+          }
+        })
+        .catch(() => {});
+    });
+  }, [stocks]);
 
   const doScan = (micros, fundamentals) => {
     setLoading(true);
@@ -269,6 +291,60 @@ function App() {
     });
   };
 
+  const handleTriggerBhavcopy = async () => {
+    setBhavStatus('loading');
+    setBhavLog([]);
+    const log = (msg) => setBhavLog(prev => [...prev, msg]);
+
+    log('📦 Triggering Bhavcopy Delivery Fetch via GitHub Actions...');
+    try {
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-bhavcopy', { method: 'POST' });
+      const d = await r.json();
+      if (d.status !== 'success') { log(`❌ ${d.message}`); setBhavStatus('error'); return; }
+    } catch (e) { log(`❌ Network error: ${e.message}`); setBhavStatus('error'); return; }
+
+    log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
+    let lastId = 0;
+
+    const progressInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/bhavcopy-progress?since_id=${lastId}`);
+        const d = await r.json();
+        if (d.lines && d.lines.length > 0) {
+          d.lines.forEach(({ id, line }) => { log(line); lastId = id; });
+        }
+      } catch (_) {}
+    }, 3000);
+
+    await new Promise((resolve, reject) => {
+      const ghInterval = setInterval(async () => {
+        try {
+          const r = await fetch('https://algo-scanner-lnck.onrender.com/api/bhavcopy-status');
+          const d = await r.json();
+          if (d.status === 'completed') {
+            clearInterval(ghInterval);
+            setTimeout(async () => {
+              try {
+                const r2 = await fetch(`https://algo-scanner-lnck.onrender.com/api/bhavcopy-progress?since_id=${lastId}`);
+                const d2 = await r2.json();
+                if (d2.lines && d2.lines.length > 0) d2.lines.forEach(({ line }) => log(line));
+              } catch (_) {}
+              clearInterval(progressInterval);
+              d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+            }, 4000);
+          }
+        } catch (_) {}
+      }, 15000);
+    }).then(() => {
+      setBhavStatus('success');
+      setDeliveryCache({});
+    }).catch((e) => {
+      log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      clearInterval(progressInterval);
+      setBhavStatus('error');
+    });
+  };
+
   const handleExportCSV = () => {
     if (sortedStocks.length === 0) return;
 
@@ -372,7 +448,7 @@ function App() {
   };
   const t = themes[theme]; 
 
-  const gridRowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center' };
+  const gridRowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.8fr 1.2fr', width: '100%', alignItems: 'center', textAlign: 'center' };
   const headerSortStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
   const tabStyle = { padding: '6px 16px', borderRadius: '6px', border: 'none', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' }; 
   const isScanDisabled = selectedMicros.size === 0 && selectedFundamentals.length === 0;
@@ -498,6 +574,7 @@ function App() {
                   <div onClick={() => toggleSort('first_15m_cross_time')} style={headerSortStyle}>15m Pullback ⇅</div>
                   <div onClick={() => toggleSort('first_1h_cross_time')} style={headerSortStyle}>1H Pullback ⇅</div>
                   <div onClick={() => toggleSort('industry')} style={headerSortStyle}>Industry & Sector ⇅</div>
+                  <div style={{ cursor: 'default' }}>Delivery % (14d)</div>
                 </div>
 
                 <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -538,6 +615,10 @@ function App() {
                             <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
                             <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>
                             <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mappedSector}</div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+                            <DeliverySparkline data={deliveryCache[cleanTicker]} theme={theme} />
                           </div>
                         </div>
                       );
@@ -744,6 +825,52 @@ function App() {
                 </div>
               )}
             </div>
+
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>NSE Bhavcopy — Delivery Data</div>
+                <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
+                  Fetches NSE Bhavcopy delivery % for all stocks with an active daily uptrend or intraday crossover. Stores 14 days of rolling history per stock. Runs automatically at <strong>4:00 AM IST</strong> daily — use this to trigger it manually if needed.
+                </div>
+              </div>
+              <button
+                onClick={handleTriggerBhavcopy}
+                disabled={bhavStatus !== 'idle'}
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: bhavStatus === 'idle' ? 'pointer' : 'not-allowed',
+                  transition: 'all 0.2s',
+                  backgroundColor:
+                    bhavStatus === 'loading' ? '#eab308' :
+                    bhavStatus === 'success' ? '#10b981' :
+                    bhavStatus === 'error'   ? '#ef4444' :
+                    t.btnPrimaryBg,
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                {bhavStatus === 'idle'    && '📦 Fetch Delivery Data'}
+                {bhavStatus === 'loading' && '⏳ Fetching...'}
+                {bhavStatus === 'success' && '✅ Done'}
+                {bhavStatus === 'error'   && '❌ Failed — Retry'}
+              </button>
+
+              {bhavLog.length > 0 && (
+                <div style={{ backgroundColor: theme === 'dark' ? '#020617' : '#0f172a', borderRadius: '8px', padding: '14px 16px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.8', maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {bhavLog.map((line, i) => (
+                    <div key={i} style={{ color: line.startsWith('❌') ? '#f87171' : line.startsWith('✅') || line.startsWith('🎉') ? '#4ade80' : line.startsWith('📦') || line.startsWith('📅') || line.startsWith('🧹') ? '#60a5fa' : line.startsWith('  ↳') ? '#94a3b8' : line.startsWith('⚠️') ? '#fbbf24' : '#e2e8f0' }}>{line}</div>
+                  ))}
+                  {bhavStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -754,6 +881,38 @@ function App() {
 const PullbackIcon = ({ color }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16C10 14.5 14 13 20 11.5" stroke={color} strokeWidth="3" strokeLinecap="round" /><path d="M4 8C10 10 14 16 20 20" stroke={color} strokeOpacity="0.4" strokeWidth="3" strokeLinecap="round" /></svg>
 );
+
+const DeliverySparkline = ({ data, theme }) => {
+  if (!data || data.length === 0) {
+    return <span style={{ fontSize: '11px', color: '#94a3b8' }}>--</span>;
+  }
+  const w = 80, h = 32, pad = 3;
+  const vals = data.map(d => d.pct);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+  const pts = vals.map((v, i) => {
+    const x = pad + (i / (vals.length - 1 || 1)) * (w - pad * 2);
+    const y = pad + (1 - (v - min) / range) * (h - pad * 2);
+    return `${x},${y}`;
+  }).join(' ');
+  const last = vals[vals.length - 1];
+  const prev = vals[vals.length - 2] ?? last;
+  const color = last >= prev ? '#10b981' : '#f87171';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+      <svg width={w} height={h} style={{ overflow: 'visible' }}>
+        <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+        {vals.map((v, i) => {
+          const x = pad + (i / (vals.length - 1 || 1)) * (w - pad * 2);
+          const y = pad + (1 - (v - min) / range) * (h - pad * 2);
+          return <circle key={i} cx={x} cy={y} r="2" fill={color} opacity="0.7" />;
+        })}
+      </svg>
+      <span style={{ fontSize: '10px', color, fontWeight: '700' }}>{last.toFixed(1)}%</span>
+    </div>
+  );
+};
 
 const TVChart = ({ symbol, theme }) => {
   useEffect(() => {
