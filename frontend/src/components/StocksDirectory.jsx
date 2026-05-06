@@ -237,7 +237,7 @@ export default function StocksDirectory({ theme, t }) {
                 <div style={{ color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.sector}>{row.sector || '--'}</div>
                 <div style={{ color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.industry}>{row.industry || '--'}</div>
                 <div style={{ color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.basic_industry}>{row.basic_industry || '--'}</div>
-                <div style={{ fontWeight: '700', color: rsColor, textAlign: 'center', fontSize: '12px' }}>
+                <div style={{ fontWeight: '700', color: rsColor, fontSize: '12px' }}>
                   {rs != null ? (rs > 0 ? `+${rs}` : `${rs}`) : '--'}
                 </div>
               </div>
