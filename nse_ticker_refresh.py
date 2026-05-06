@@ -16,11 +16,14 @@ preventing cascade failures that corrupt 40%+ of results.
 
 import csv, io, os, time, requests, psycopg2
 from psycopg2.extras import execute_values
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 NEON_URL        = os.environ["NEON_URL"]
-DELAY           = 0.6   # seconds between requests — single-threaded, no parallelism
+WORKERS         = 3     # 3 workers × 1.0s delay = ~3 req/s total — safe for NSE
+DELAY           = 1.0   # per-worker delay between requests
 BATCH_LOG       = 100
-SESSION_REFRESH = 400   # re-init NSE session every N requests to prevent cookie expiry
+SESSION_REFRESH = 300   # each worker refreshes its own session every N requests
 
 NSE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -72,28 +75,50 @@ def fetch_equity_list(session: requests.Session) -> list[dict]:
     return stocks
 
 
-def fetch_classification(symbol: str, session: requests.Session) -> dict:
-    """Fetch sector, industry AND basic_industry from NSE in a single API call."""
-    empty = {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
-    try:
-        time.sleep(DELAY)
-        r = session.get(
-            f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
-            headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            info = r.json().get("industryInfo", {})
-            sector         = info.get("sector", "")
-            industry       = info.get("industry", "")
-            basic_industry = info.get("basicIndustry", "")
-            if sector or industry or basic_industry:
-                return {"symbol": symbol, "sector": sector,
-                        "industry": industry, "basic_industry": basic_industry}
-            return empty  # 200 but stock genuinely has no classification
-        return empty
-    except Exception:
-        return empty
+_progress_lock = threading.Lock()
+_done_count    = 0
+_classified    = {}
+_failed_syms   = []
+
+
+def worker_fetch(symbols_chunk: list[str]) -> None:
+    """
+    Each worker owns its own NSE session and processes its chunk sequentially.
+    Refreshes the session every SESSION_REFRESH requests to prevent cookie expiry.
+    """
+    global _done_count, _classified, _failed_syms
+
+    session = make_session()
+    for i, symbol in enumerate(symbols_chunk, 1):
+        if i % SESSION_REFRESH == 0:
+            session = make_session()
+
+        empty = {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
+        result = empty
+        try:
+            time.sleep(DELAY)
+            r = session.get(
+                f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
+                headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}"},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                info = r.json().get("industryInfo", {})
+                sector         = info.get("sector", "")
+                industry       = info.get("industry", "")
+                basic_industry = info.get("basicIndustry", "")
+                if sector or industry or basic_industry:
+                    result = {"symbol": symbol, "sector": sector,
+                              "industry": industry, "basic_industry": basic_industry}
+        except Exception:
+            pass
+
+        with _progress_lock:
+            _done_count += 1
+            if result["sector"] or result["industry"] or result["basic_industry"]:
+                _classified[symbol] = result
+            else:
+                _failed_syms.append(symbol)
 
 
 def ensure_schema(cur):
@@ -168,9 +193,19 @@ def main():
     test_symbols = ["RELIANCE", "INFY", "HDFCBANK", "TCS", "SBIN"]
     passed = 0
     for sym in test_symbols:
-        r = fetch_classification(sym, session)
-        if r["sector"]:
-            log_progress(f"  ↳ ✅ {sym}: {r['sector']} / {r['industry']}")
+        try:
+            time.sleep(DELAY)
+            r = session.get(
+                f"https://www.nseindia.com/api/quote-equity?symbol={sym}",
+                headers={**API_HEADERS, "Referer": f"https://www.nseindia.com/get-quote/equity/{sym}"},
+                timeout=15,
+            )
+            info = r.json().get("industryInfo", {}) if r.status_code == 200 else {}
+            sector = info.get("sector", "")
+        except Exception:
+            sector = ""
+        if sector:
+            log_progress(f"  ↳ ✅ {sym}: {sector} / {info.get('industry', '')}")
             passed += 1
         else:
             log_progress(f"  ↳ ❌ {sym}: no data")
@@ -206,27 +241,44 @@ def main():
     conn.commit()
     log_progress(f"✅ Upserted {total} stocks | Removed {deleted} delisted")
 
-    # ── Step 3: Fetch classifications — single-threaded with periodic session refresh ──
-    log_progress(f"🌐 [3/4] Fetching classifications (single-threaded, {total} stocks, ~{int(total * DELAY // 60)} min)...")
-    classified = {}
-    failed     = 0
+    # ── Step 3: Fetch classifications — 3 workers, each with own session ──
+    est_min = int(total * DELAY / WORKERS / 60)
+    log_progress(f"🌐 [3/4] Fetching classifications ({WORKERS} workers, {total} stocks, ~{est_min} min)...")
 
-    for i, stock in enumerate(stock_list, 1):
-        # Refresh NSE session cookie every SESSION_REFRESH requests
-        if i % SESSION_REFRESH == 0:
-            log_progress(f"  🔄 Refreshing NSE session at stock {i}/{total}...")
-            session = make_session()
+    global _done_count, _classified, _failed_syms
+    _done_count = 0
+    _classified = {}
+    _failed_syms = []
 
-        sym = stock["symbol"]
-        result = fetch_classification(sym, session)
-        if result["sector"] or result["industry"] or result["basic_industry"]:
-            classified[sym] = result
-        else:
-            failed += 1
+    # Split stock list evenly across workers
+    symbols = [s["symbol"] for s in stock_list]
+    chunk_size = (len(symbols) + WORKERS - 1) // WORKERS
+    chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
 
-        if i % BATCH_LOG == 0 or i == total:
-            log_progress(f"  ↳ {i}/{total} fetched — {len(classified)} classified, {failed} failed")
+    # Progress logger runs in main thread while workers fetch
+    last_logged = 0
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        futures = [executor.submit(worker_fetch, chunk) for chunk in chunks]
+        while any(f.running() for f in futures) or _done_count < total:
+            time.sleep(5)
+            with _progress_lock:
+                done = _done_count
+                good = len(_classified)
+                bad  = len(_failed_syms)
+            if done >= last_logged + BATCH_LOG or done == total:
+                log_progress(f"  ↳ {done}/{total} fetched — {good} classified, {bad} failed")
+                last_logged = done
+            if done >= total:
+                break
+        # Wait for all futures to finish
+        for f in futures:
+            f.result()
 
+    classified   = _classified
+    failed_syms  = _failed_syms
+
+    if failed_syms:
+        log_progress(f"⚠️ {len(failed_syms)} unclassified: {', '.join(failed_syms)}")
     log_progress(f"✅ {len(classified)}/{total} stocks classified")
 
     # ── Step 4: Write to DB ──────────────────────────────────────
