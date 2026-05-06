@@ -130,30 +130,36 @@ async def get_sector_heatmap():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     sector_query = """
-    SELECT 
+    SELECT
         sector,
         COUNT(*) as total_stocks,
         ROUND(AVG(rs_score)::numeric, 3) as avg_rs,
         COUNT(CASE WHEN daily_cross_active = 'Yes' THEN 1 END) as active_crosses,
-        ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(*)) * 100, 2) as outperforming_pct
+        CASE WHEN COUNT(rs_score) > 0
+            THEN ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(rs_score)) * 100, 2)
+            ELSE NULL
+        END as outperforming_pct
     FROM stocks
     WHERE sector IS NOT NULL AND sector != ''
     GROUP BY sector
-    ORDER BY avg_rs DESC
+    ORDER BY avg_rs DESC NULLS LAST
     """
-    
+
     industry_query = """
-    SELECT 
+    SELECT
         sector,
         industry,
         COUNT(*) as total_stocks,
         ROUND(AVG(rs_score)::numeric, 3) as avg_rs,
         COUNT(CASE WHEN daily_cross_active = 'Yes' THEN 1 END) as active_crosses,
-        ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(*)) * 100, 2) as outperforming_pct
+        CASE WHEN COUNT(rs_score) > 0
+            THEN ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(rs_score)) * 100, 2)
+            ELSE NULL
+        END as outperforming_pct
     FROM stocks
     WHERE sector IS NOT NULL AND sector != '' AND industry IS NOT NULL AND industry != ''
     GROUP BY sector, industry
-    ORDER BY avg_rs DESC
+    ORDER BY avg_rs DESC NULLS LAST
     """
     
     cursor.execute(sector_query)
@@ -182,11 +188,14 @@ async def get_industry_heatmap():
         COUNT(*) as total_stocks,
         ROUND(AVG(rs_score)::numeric, 3) as avg_rs,
         COUNT(CASE WHEN daily_cross_active = 'Yes' THEN 1 END) as active_crosses,
-        ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(*)) * 100, 2) as outperforming_pct
+        CASE WHEN COUNT(rs_score) > 0
+            THEN ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(rs_score)) * 100, 2)
+            ELSE NULL
+        END as outperforming_pct
     FROM stocks
     WHERE industry IS NOT NULL AND industry != ''
     GROUP BY industry, sector
-    ORDER BY avg_rs DESC
+    ORDER BY avg_rs DESC NULLS LAST
     """
 
     cursor.execute(industry_query)
@@ -210,11 +219,14 @@ async def get_micro_industry_heatmap():
         COUNT(*) as total_stocks,
         ROUND(AVG(rs_score)::numeric, 3) as avg_rs,
         COUNT(CASE WHEN daily_cross_active = 'Yes' THEN 1 END) as active_crosses,
-        ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(*)) * 100, 2) as outperforming_pct
+        CASE WHEN COUNT(rs_score) > 0
+            THEN ROUND((SUM(CASE WHEN rs_score > 0 THEN 1.0 ELSE 0.0 END) / COUNT(rs_score)) * 100, 2)
+            ELSE NULL
+        END as outperforming_pct
     FROM stocks
     WHERE basic_industry IS NOT NULL AND basic_industry != ''
     GROUP BY basic_industry, industry, sector
-    ORDER BY avg_rs DESC
+    ORDER BY avg_rs DESC NULLS LAST
     """
 
     cursor.execute(query)

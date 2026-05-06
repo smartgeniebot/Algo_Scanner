@@ -161,15 +161,16 @@ const MicroIndustryHeatmap = ({ onScanNavigate, theme }) => {
             {/* TABLE BODY */}
             <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderTop: 'none', borderRadius: '0 0 8px 8px' }}>
                 {displayData.map((item, idx) => {
-                    const rsValue = Number(item?.avg_rs) || 0;
+                    const rsRaw = item?.avg_rs != null ? Number(item.avg_rs) : null;
+                    const rsValue = rsRaw ?? 0;
                     const outperformingPct = Number(item?.outperforming_pct) || 0;
                     const title = item?.basic_industry ? String(item.basic_industry) : "Unknown";
                     const industry = item?.industry ? String(item.industry) : "Unknown";
                     const sector = item?.sector ? String(item.sector) : "Unknown";
                     const isSelected = selected.includes(title);
 
-                    const style = getScoreStyle(rsValue);
-                    const rsPercent = (rsValue * 100).toFixed(1);
+                    const style = rsRaw != null ? getScoreStyle(rsValue) : { bg: 'transparent', text: '#94a3b8', bar: '#94a3b8' };
+                    const rsDisplay = rsRaw != null ? (rsValue > 0 ? `+${(rsValue * 100).toFixed(1)}%` : `${(rsValue * 100).toFixed(1)}%`) : '--';
 
                     return (
                         <div
@@ -196,7 +197,7 @@ const MicroIndustryHeatmap = ({ onScanNavigate, theme }) => {
 
                             <div style={{ display: 'flex', justifyContent: 'center' }}>
                                 <span style={{ backgroundColor: style.bg, color: style.text, padding: '4px 10px', borderRadius: '6px', fontSize: '13px', fontWeight: '800' }}>
-                                    {rsValue > 0 ? `+${rsPercent}%` : `${rsPercent}%`}
+                                    {rsDisplay}
                                 </span>
                             </div>
 
