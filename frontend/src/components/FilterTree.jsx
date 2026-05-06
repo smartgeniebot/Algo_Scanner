@@ -51,7 +51,7 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
 
   const searchActive = searchTerm.trim().length > 0;
 
-  // Build a flat list of rows to render — avoids all nesting/bubbling issues
+  // Flat list — no DOM nesting between sector/macro/micro rows
   const rows = useMemo(() => {
     const list = [];
     Object.entries(filteredTree).forEach(([sector, macros]) => {
@@ -63,7 +63,7 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
 
       Object.entries(macros).forEach(([macro, micros]) => {
         const macroKey = `${sector}__${macro}`;
-        list.push({ type: 'macro', sector, macro, micros, macroKey });
+        list.push({ type: 'macro', macro, micros, macroKey });
 
         const isMacroOpen = searchActive ? true : !!openMacros[macroKey];
         if (!isMacroOpen) return;
@@ -76,29 +76,6 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
     return list;
   }, [filteredTree, openSectors, openMacros, searchActive]);
 
-  const handleSectorToggle = (macros) => {
-    const all = Object.values(macros).flat();
-    const allSel = all.every(mi => selected.has(mi));
-    const next = new Set(selected);
-    if (allSel) all.forEach(mi => next.delete(mi));
-    else all.forEach(mi => next.add(mi));
-    onChange(next);
-  };
-
-  const handleMacroToggle = (micros) => {
-    const allSel = micros.every(mi => selected.has(mi));
-    const next = new Set(selected);
-    if (allSel) micros.forEach(mi => next.delete(mi));
-    else micros.forEach(mi => next.add(mi));
-    onChange(next);
-  };
-
-  const handleMicroToggle = (micro) => {
-    const next = new Set(selected);
-    next.has(micro) ? next.delete(micro) : next.add(micro);
-    onChange(next);
-  };
-
   const rowBase = {
     display: 'flex', alignItems: 'center', borderRadius: '5px',
     userSelect: 'none', transition: 'background-color 0.12s',
@@ -106,31 +83,43 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      {rows.map((row, idx) => {
+      {rows.map((row) => {
 
         if (row.type === 'sector') {
           const { sector, macros, allMicros } = row;
-          const selCount     = allMicros.filter(mi => selected.has(mi)).length;
-          const checked      = selCount === allMicros.length && allMicros.length > 0;
+          const selCount      = allMicros.filter(mi => selected.has(mi)).length;
+          const checked       = selCount === allMicros.length && allMicros.length > 0;
           const indeterminate = selCount > 0 && !checked;
-          const isOpen       = searchActive ? true : !!openSectors[sector];
-          const bg           = checked ? (theme === 'dark' ? 'rgba(59,130,246,0.12)' : '#eff6ff') : 'transparent';
+          const isOpen        = searchActive ? true : !!openSectors[sector];
+          const bg            = checked ? (theme === 'dark' ? 'rgba(59,130,246,0.12)' : '#eff6ff') : 'transparent';
 
           return (
-            <div key={`sector-${sector}`} style={{ ...rowBase, padding: '7px 12px', gap: '4px', backgroundColor: bg }}
+            <div
+              key={`sector-${sector}`}
+              style={{ ...rowBase, padding: '7px 12px', gap: '4px', backgroundColor: bg }}
               onMouseEnter={e => { if (!checked) e.currentTarget.style.backgroundColor = t.hover; }}
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
             >
-              {/* Chevron — open/close only */}
               <div
-                onClick={() => setOpenSectors(prev => ({ ...prev, [sector]: !prev[sector] }))}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenSectors(prev => ({ ...prev, [sector]: !prev[sector] }));
+                }}
                 style={{ padding: '2px 6px 2px 0', cursor: 'pointer', flexShrink: 0 }}
               >
                 <Chevron open={isOpen} />
               </div>
-              {/* Checkbox — toggle selection only */}
               <div
-                onClick={() => handleSectorToggle(macros)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const all = allMicros;
+                  const allSel = all.every(mi => selected.has(mi));
+                  const next = new Set(selected);
+                  if (allSel) all.forEach(mi => next.delete(mi));
+                  else all.forEach(mi => next.add(mi));
+                  console.log('[FilterTree] sector toggle', sector, [...next]);
+                  onChange(next);
+                }}
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, cursor: 'pointer' }}
               >
                 <Checkbox checked={checked} indeterminate={indeterminate} accentColor={accentColor} />
@@ -148,7 +137,7 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
         }
 
         if (row.type === 'macro') {
-          const { macro, micros, macroKey, sector } = row;
+          const { macro, micros, macroKey } = row;
           const selCount      = micros.filter(mi => selected.has(mi)).length;
           const checked       = selCount === micros.length && micros.length > 0;
           const indeterminate = selCount > 0 && !checked;
@@ -156,20 +145,31 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
           const bg            = checked ? (theme === 'dark' ? 'rgba(59,130,246,0.08)' : '#f0f7ff') : 'transparent';
 
           return (
-            <div key={`macro-${macroKey}`} style={{ ...rowBase, padding: '5px 12px 5px 20px', gap: '4px', backgroundColor: bg }}
+            <div
+              key={`macro-${macroKey}`}
+              style={{ ...rowBase, padding: '5px 12px 5px 20px', gap: '4px', backgroundColor: bg }}
               onMouseEnter={e => { if (!checked) e.currentTarget.style.backgroundColor = t.hover; }}
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
             >
-              {/* Chevron — open/close only */}
               <div
-                onClick={() => setOpenMacros(prev => ({ ...prev, [macroKey]: !prev[macroKey] }))}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenMacros(prev => ({ ...prev, [macroKey]: !prev[macroKey] }));
+                }}
                 style={{ padding: '2px 6px 2px 0', cursor: 'pointer', flexShrink: 0 }}
               >
                 <Chevron open={isOpen} />
               </div>
-              {/* Checkbox — toggle selection only */}
               <div
-                onClick={() => handleMacroToggle(micros)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const allSel = micros.every(mi => selected.has(mi));
+                  const next = new Set(selected);
+                  if (allSel) micros.forEach(mi => next.delete(mi));
+                  else micros.forEach(mi => next.add(mi));
+                  console.log('[FilterTree] macro toggle', macro, [...next]);
+                  onChange(next);
+                }}
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, cursor: 'pointer' }}
               >
                 <Checkbox checked={checked} indeterminate={indeterminate} accentColor={accentColor} />
@@ -189,7 +189,13 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
           return (
             <div
               key={`micro-${micro}`}
-              onClick={() => handleMicroToggle(micro)}
+              onClick={(e) => {
+                e.stopPropagation();
+                const next = new Set(selected);
+                next.has(micro) ? next.delete(micro) : next.add(micro);
+                console.log('[FilterTree] micro toggle', micro, [...next]);
+                onChange(next);
+              }}
               style={{ ...rowBase, padding: '4px 12px 4px 44px', gap: '7px', cursor: 'pointer', backgroundColor: bg }}
               onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = t.hover; }}
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
