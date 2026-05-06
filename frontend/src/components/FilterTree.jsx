@@ -1,10 +1,9 @@
 import React, { useState, useMemo } from 'react';
 
 // Checkbox with 3 states: checked, unchecked, indeterminate
-function Checkbox({ checked, indeterminate, onChange, accentColor }) {
+function Checkbox({ checked, indeterminate, accentColor }) {
   return (
     <div
-      onClick={onChange}
       style={{
         width: '15px', height: '15px', flexShrink: 0,
         border: `2px solid ${checked || indeterminate ? accentColor : '#94a3b8'}`,
@@ -14,6 +13,7 @@ function Checkbox({ checked, indeterminate, onChange, accentColor }) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         transition: 'all 0.15s',
         position: 'relative',
+        pointerEvents: 'none', // let parent handle clicks
       }}
     >
       {checked && (
@@ -53,15 +53,6 @@ export default function FilterTree({
 
   const accentColor = '#3b82f6';
 
-  // Flatten all micros across tree for "select all" use
-  const allMicros = useMemo(() => {
-    const list = [];
-    Object.values(tree).forEach(macros =>
-      Object.values(macros).forEach(micros => list.push(...micros))
-    );
-    return list;
-  }, [tree]);
-
   // Filter tree by searchTerm — returns pruned copy
   const filteredTree = useMemo(() => {
     if (!searchTerm.trim()) return tree;
@@ -82,7 +73,6 @@ export default function FilterTree({
     return result;
   }, [tree, searchTerm]);
 
-  // Auto-expand sectors/macros that match search
   const searchActive = searchTerm.trim().length > 0;
 
   const toggleMicro = (micro) => {
@@ -152,16 +142,25 @@ export default function FilterTree({
               onMouseEnter={e => { if (!sectorChecked) e.currentTarget.style.backgroundColor = t.hover; }}
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = sectorChecked ? (theme === 'dark' ? 'rgba(59,130,246,0.12)' : '#eff6ff') : 'transparent'; }}
             >
-              <div onClick={() => toggleSectorOpen(sector)} style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0 }}>
+              {/* Chevron — opens/closes accordion */}
+              <div
+                onClick={() => toggleSectorOpen(sector)}
+                style={{ display: 'flex', alignItems: 'center', padding: '2px', flexShrink: 0 }}
+              >
                 <Chevron open={isSectorOpen} />
-                <Checkbox checked={sectorChecked} indeterminate={sectorIndet} onChange={(e) => { e?.stopPropagation?.(); toggleSector(macros); }} accentColor={accentColor} />
-                <span
-                  onClick={e => { e.stopPropagation(); toggleSector(macros); }}
-                  style={{ fontWeight: '700', fontSize: '13px', color: t.textMain, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}
-                >
+              </div>
+
+              {/* Checkbox + label — toggles selection */}
+              <div
+                onClick={() => toggleSector(macros)}
+                style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0 }}
+              >
+                <Checkbox checked={sectorChecked} indeterminate={sectorIndet} accentColor={accentColor} />
+                <span style={{ fontWeight: '700', fontSize: '13px', color: t.textMain, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                   {sector}
                 </span>
               </div>
+
               {selCount > 0 && (
                 <span style={{ fontSize: '10px', fontWeight: '800', color: accentColor, backgroundColor: theme === 'dark' ? 'rgba(59,130,246,0.2)' : '#dbeafe', borderRadius: '10px', padding: '1px 6px', flexShrink: 0 }}>
                   {selCount}
@@ -185,13 +184,21 @@ export default function FilterTree({
                     onMouseEnter={e => { if (!macroChecked) e.currentTarget.style.backgroundColor = t.hover; }}
                     onMouseLeave={e => { e.currentTarget.style.backgroundColor = macroChecked ? (theme === 'dark' ? 'rgba(59,130,246,0.08)' : '#f0f7ff') : 'transparent'; }}
                   >
-                    <div onClick={() => toggleMacroOpen(macroKey)} style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0 }}>
+                    {/* Chevron — opens/closes accordion */}
+                    <div
+                      onClick={() => toggleMacroOpen(macroKey)}
+                      style={{ display: 'flex', alignItems: 'center', padding: '2px', flexShrink: 0 }}
+                    >
                       <Chevron open={isMacroOpen} />
-                      <Checkbox checked={macroChecked} indeterminate={macroIndet} onChange={e => { e?.stopPropagation?.(); toggleMacro(micros); }} accentColor={accentColor} />
-                      <span
-                        onClick={e => { e.stopPropagation(); toggleMacro(micros); }}
-                        style={{ fontWeight: '600', fontSize: '12px', color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}
-                      >
+                    </div>
+
+                    {/* Checkbox + label — toggles selection */}
+                    <div
+                      onClick={() => toggleMacro(micros)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0 }}
+                    >
+                      <Checkbox checked={macroChecked} indeterminate={macroIndet} accentColor={accentColor} />
+                      <span style={{ fontWeight: '600', fontSize: '12px', color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                         {macro}
                       </span>
                     </div>
@@ -208,7 +215,7 @@ export default function FilterTree({
                         onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = t.hover; }}
                         onMouseLeave={e => { e.currentTarget.style.backgroundColor = isSelected ? (theme === 'dark' ? 'rgba(59,130,246,0.1)' : '#eff6ff') : 'transparent'; }}
                       >
-                        <Checkbox checked={isSelected} indeterminate={false} onChange={() => toggleMicro(micro)} accentColor={accentColor} />
+                        <Checkbox checked={isSelected} indeterminate={false} accentColor={accentColor} />
                         <span style={{ fontSize: '12px', color: isSelected ? accentColor : t.textMuted, fontWeight: isSelected ? '600' : '400', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {micro}
                         </span>
