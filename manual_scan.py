@@ -157,6 +157,8 @@ def run_daily_scan():
                                 "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
 
     n_df = pd.DataFrame(n_res.get('candles', []), columns=['date','open','high','low','close','vol'])
+    n_df['date'] = n_df['date'].astype(int)
+    n_df = n_df.set_index('date').sort_index()
 
     cursor.execute("SELECT id, fyers_symbol, daily_cross_active, daily_cross_date, first_1h_cross_time, first_15m_cross_time FROM stocks")
     stocks = cursor.fetchall()
@@ -205,11 +207,22 @@ def run_daily_scan():
 
             df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
             if len(df) < 56: continue
-            
+
+            df['date'] = df['date'].astype(int)
             bars = min(len(df), 56)
-            s_curr, s_past = df['close'].iloc[-1], df['close'].iloc[-bars]
-            n_curr, n_past = n_df['close'].iloc[-1], n_df['close'].iloc[-bars]
-            
+            s_curr = df['close'].iloc[-1]
+            s_past = df['close'].iloc[-bars]
+            past_date = int(df['date'].iloc[-bars])
+
+            # Look up Nifty on the exact same date as the stock's lookback start.
+            # Fall back to the nearest prior trading day if that date is missing.
+            n_curr = n_df['close'].iloc[-1]
+            idx_pos = n_df.index.searchsorted(past_date, side='right') - 1
+            if idx_pos < 0:
+                failed_stocks.append(symbol)
+                continue
+            n_past = n_df['close'].iloc[idx_pos]
+
             rs_val = float(round(((s_curr / s_past) / (n_curr / n_past)) - 1, 2))
 
             new_active = "No"
