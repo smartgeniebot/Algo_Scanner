@@ -33,6 +33,22 @@ def get_db_connection():
     # Connecting to Neon Cloud
     return psycopg2.connect(NEON_URL)
 
+@app.get("/api/stocks-directory")
+async def get_stocks_directory():
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score
+        FROM stocks
+        WHERE fyers_symbol IS NOT NULL
+        ORDER BY rs_score DESC NULLS LAST
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 @app.get("/api/filters")
 async def get_filters():
     conn = get_db_connection()
@@ -341,32 +357,118 @@ async def save_classifications(payload: ClassificationPayload):
 
 
 # 🚀 NEW: Secure GitHub Trigger Endpoint
+def _gh_headers():
+    return {
+        "Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN')}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+def _clear_job(job: str):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS job_progress (
+                id SERIAL PRIMARY KEY, job TEXT NOT NULL,
+                line TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("DELETE FROM job_progress WHERE job = %s", (job,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
+
+def _get_progress(job: str, since_id: int):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, line FROM job_progress WHERE job = %s AND id > %s ORDER BY id ASC", (job, since_id))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {"lines": [{"id": r["id"], "line": r["line"]} for r in rows]}
+    except Exception as e:
+        return {"lines": [], "error": str(e)}
+
+def _get_workflow_status(workflow_file: str):
+    token = os.environ.get("GITHUB_TOKEN")
+    repo  = os.environ.get("GITHUB_REPO")
+    if not token or not repo:
+        return {"status": "error"}
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/runs?per_page=1",
+            headers=_gh_headers(), timeout=10
+        )
+        runs = r.json().get("workflow_runs", [])
+        if not runs:
+            return {"status": "none"}
+        run = runs[0]
+        return {"status": run.get("status"), "conclusion": run.get("conclusion"), "url": run.get("html_url")}
+    except Exception:
+        return {"status": "error"}
+
+
 @app.post("/api/trigger-scan")
 async def trigger_github_scan():
     token = os.environ.get("GITHUB_TOKEN")
-    repo = os.environ.get("GITHUB_REPO")
+    repo  = os.environ.get("GITHUB_REPO")
     workflow = os.environ.get("GITHUB_WORKFLOW")
-    
+
     if not token or not repo or not workflow:
         return {"status": "error", "message": "Server missing GitHub credentials"}
 
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
-    # Tells GitHub to run the script on the 'main' branch
-    data = {"ref": "main"} 
-    
-    response = requests.post(url, headers=headers, json=data)
-    
-    # GitHub returns 204 No Content if the trigger is successful
+    _clear_job("daily_scan")
+
+    response = requests.post(
+        f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches",
+        headers=_gh_headers(), json={"ref": "main"}
+    )
     if response.status_code == 204:
         return {"status": "success", "message": "Background scan initiated successfully"}
-    else:
-        return {"status": "error", "message": f"GitHub Error: {response.text}"}
+    return {"status": "error", "message": f"GitHub Error: {response.text}"}
+
+
+@app.get("/api/scan-progress")
+async def scan_progress(since_id: int = 0):
+    return _get_progress("daily_scan", since_id)
+
+
+@app.get("/api/scan-status")
+async def scan_status():
+    workflow = os.environ.get("GITHUB_WORKFLOW", "market_engine.yml")
+    return _get_workflow_status(workflow)
+
+
+@app.post("/api/trigger-intraday")
+async def trigger_intraday_scan():
+    token = os.environ.get("GITHUB_TOKEN")
+    repo  = os.environ.get("GITHUB_REPO")
+
+    if not token or not repo:
+        return {"status": "error", "message": "Server missing GitHub credentials"}
+
+    _clear_job("intraday_pulse")
+
+    response = requests.post(
+        f"https://api.github.com/repos/{repo}/actions/workflows/intraday_engine.yml/dispatches",
+        headers=_gh_headers(), json={"ref": "main"}
+    )
+    if response.status_code == 204:
+        return {"status": "success", "message": "Intraday pulse initiated successfully"}
+    return {"status": "error", "message": f"GitHub Error: {response.text}"}
+
+
+@app.get("/api/intraday-progress")
+async def intraday_progress(since_id: int = 0):
+    return _get_progress("intraday_pulse", since_id)
+
+
+@app.get("/api/intraday-status")
+async def intraday_status():
+    return _get_workflow_status("intraday_engine.yml")
 
 
 if __name__ == "__main__":

@@ -10,8 +10,16 @@ import psycopg2
 from config import NEON_URL
 
 CLIENT_ID = "QTKF8KZDM9-100"
-LOOKBACK_DAYS = 45 
+LOOKBACK_DAYS = 45
 IST = timezone(timedelta(hours=5, minutes=30))
+
+def log_progress(cursor, conn, msg):
+    print(msg)
+    try:
+        cursor.execute("INSERT INTO job_progress (job, line) VALUES (%s, %s)", ('daily_scan', msg))
+        conn.commit()
+    except Exception:
+        pass
 
 def get_fyers():
     with open("access_token.txt", "r") as f:
@@ -123,23 +131,37 @@ def run_daily_scan():
     conn = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
 
+    # Ensure job_progress table exists and clear previous daily_scan run
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS job_progress (
+            id SERIAL PRIMARY KEY, job TEXT NOT NULL,
+            line TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cursor.execute("DELETE FROM job_progress WHERE job = 'daily_scan'")
+    conn.commit()
+
+    log_progress(cursor, conn, "🚀 Daily Scan Started")
+
     # PHASE 1: Run both Screener.in scrapes
+    log_progress(cursor, conn, "📋 Phase 1: Fetching fundamentals from Screener.in...")
     run_all_fundamental_scrapes(conn, cursor)
+    log_progress(cursor, conn, "✅ Phase 1 Complete: Fundamentals updated")
 
     # PHASE 2: Technical Scan
     fyers = get_fyers()
     today_ist = datetime.now(IST).date()
-    
+
     n_res = fetch_safe(fyers, {"symbol": "NSE:NIFTY50-INDEX", "resolution": "1D", "date_format": "1",
                                 "range_from": (today_ist - timedelta(days=300)).strftime("%Y-%m-%d"),
                                 "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
-    
+
     n_df = pd.DataFrame(n_res.get('candles', []), columns=['date','open','high','low','close','vol'])
 
     cursor.execute("SELECT id, fyers_symbol, daily_cross_active, daily_cross_date, first_1h_cross_time, first_15m_cross_time FROM stocks")
     stocks = cursor.fetchall()
 
-    print(f"🚀 Phase 2: Limit-Proof Technical Scan Started for {len(stocks)} stocks...")
+    log_progress(cursor, conn, f"📊 Phase 2: Technical Scan Started for {len(stocks)} stocks...")
 
     # Priority order: EQ, BE, BZ first; then remaining equity series as fallback
     SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
@@ -175,9 +197,9 @@ def run_daily_scan():
                     cursor.execute("UPDATE stocks SET fyers_symbol = %s WHERE id = %s", (resolved_symbol, stock_id))
                     conn.commit()
                     symbol = resolved_symbol
-                    tqdm.write(f"✅ Series fixed: {symbol} saved to DB permanently")
+                    log_progress(cursor, conn, f"✅ Series fixed: {symbol} saved to DB permanently")
                 else:
-                    tqdm.write(f"❌ All series exhausted for {symbol}. Skipping.")
+                    log_progress(cursor, conn, f"❌ All series exhausted for {symbol}. Skipping.")
                     failed_stocks.append(symbol)
                     continue
 
@@ -261,28 +283,27 @@ def run_daily_scan():
             conn.commit()
 
             if new_active == "Yes":
-                tqdm.write(f"🎯 SAVED {symbol} -> Daily: {new_date} | 1H: {new_1h} | 15M: {new_15m}")
+                log_progress(cursor, conn, f"🎯 {symbol} → Daily: {new_date} | 1H: {new_1h} | 15M: {new_15m}")
 
         except Exception as e:
-            tqdm.write(f"❌ Error on {symbol}: {e}")
+            log_progress(cursor, conn, f"❌ Error on {symbol}: {e}")
             failed_stocks.append(symbol)
             conn.rollback()
 
         finally:
             time.sleep(0.25)
 
+    if failed_stocks:
+        log_progress(cursor, conn, f"⚠️ {len(failed_stocks)} stock(s) failed to fetch:")
+        for s in failed_stocks:
+            log_progress(cursor, conn, f"  • {s}")
+    else:
+        log_progress(cursor, conn, "✅ All stocks fetched successfully. No failures.")
+
+    log_progress(cursor, conn, "🎉 Daily Scan Complete. Database fully synchronized!")
+
     cursor.close()
     conn.close()
-
-    print("\n" + "="*60)
-    if failed_stocks:
-        print(f"⚠️  FAILED STOCKS SUMMARY: {len(failed_stocks)} stock(s) could not be fetched")
-        for s in failed_stocks:
-            print(f"   • {s}")
-    else:
-        print("✅ All stocks fetched successfully. No failures.")
-    print("="*60)
-    print("✅ Limit-Proof Cloud Scan Complete. Database fully synchronized!")
 
 if __name__ == "__main__":
     run_daily_scan()

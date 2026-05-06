@@ -12,6 +12,14 @@ from config import NEON_URL
 CLIENT_ID = "QTKF8KZDM9-100"
 IST = timezone(timedelta(hours=5, minutes=30))
 
+def log_progress(cursor, conn, msg):
+    print(msg)
+    try:
+        cursor.execute("INSERT INTO job_progress (job, line) VALUES (%s, %s)", ('intraday_pulse', msg))
+        conn.commit()
+    except Exception:
+        pass
+
 def get_fyers():
     with open("access_token.txt", "r") as f:
         token = f.read().strip()
@@ -30,19 +38,29 @@ def run_hourly_pulse():
     today_ist = datetime.now(IST).date()
     now_str = datetime.now(IST).strftime('%Y-%m-%d %H:%M')
 
-    # ☁️ NEW: Connect to Neon Cloud Database
     conn = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
-    
-    # 🎯 ONLY FETCH STOCKS THAT ARE IN AN ACTIVE DAILY UPTREND
+
+    # Ensure job_progress table exists and clear previous intraday_pulse run
     cursor.execute("""
-        SELECT id, fyers_symbol, daily_cross_date, first_1h_cross_time, first_15m_cross_time 
-        FROM stocks 
+        CREATE TABLE IF NOT EXISTS job_progress (
+            id SERIAL PRIMARY KEY, job TEXT NOT NULL,
+            line TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cursor.execute("DELETE FROM job_progress WHERE job = 'intraday_pulse'")
+    conn.commit()
+
+    log_progress(cursor, conn, f"⚡ Intraday Pulse Started at {now_str}")
+
+    cursor.execute("""
+        SELECT id, fyers_symbol, daily_cross_date, first_1h_cross_time, first_15m_cross_time
+        FROM stocks
         WHERE daily_cross_active = 'Yes'
     """)
     active_stocks = cursor.fetchall()
 
-    print(f"⚡ Intraday Cloud Pulse Started: Scanning ONLY {len(active_stocks)} active stocks for pullbacks...")
+    log_progress(cursor, conn, f"📊 Scanning {len(active_stocks)} active uptrend stocks for pullbacks...")
 
     updates_made = 0
 
@@ -102,24 +120,22 @@ def run_hourly_pulse():
 
             # --- DATABASE UPDATE ONLY IF SOMETHING CHANGED ---
             if update_needed:
-                # ☁️ NEW: Swapped '?' for '%s' for Postgres
                 cursor.execute("""
-                    UPDATE stocks 
-                    SET first_1h_cross_time=%s, first_15m_cross_time=%s 
+                    UPDATE stocks
+                    SET first_1h_cross_time=%s, first_15m_cross_time=%s
                     WHERE id=%s
                 """, (new_1h, new_15m, stock_id))
                 conn.commit()
                 updates_made += 1
-                tqdm.write(f"🚨 PULLBACK TRIGGERED: {symbol.split(':')[1]} | 1H: {new_1h} | 15M: {new_15m}")
+                log_progress(cursor, conn, f"🚨 Pullback: {symbol.split(':')[1]} | 1H: {new_1h} | 15M: {new_15m}")
 
         except Exception as e:
-            tqdm.write(f"❌ Error on {symbol}: {e}")
-            # 🛡️ THE FIX: Clear the Postgres error shield if a stock fails
+            log_progress(cursor, conn, f"❌ Error on {symbol}: {e}")
             conn.rollback()
 
+    log_progress(cursor, conn, f"🎉 Intraday Pulse Complete! New pullbacks found: {updates_made} stocks.")
     cursor.close()
     conn.close()
-    print(f"✅ Hourly Cloud Pulse Complete! Found new pullbacks for {updates_made} stocks.")
 
 if __name__ == "__main__":
     run_hourly_pulse()

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import SectorHeatmap from './components/SectorHeatmap';
 import IndustryHeatmap from './components/IndustryHeatmap';
 import MicroIndustryHeatmap from './components/MicroIndustryHeatmap';
+import StocksDirectory from './components/StocksDirectory';
 
 function App() {
   const [hierarchy, setHierarchy] = useState({});
@@ -16,8 +17,11 @@ function App() {
   
   const [activeChart, setActiveChart] = useState(null);
 
-  const [triggerStatus, setTriggerStatus] = useState('idle'); // idle, loading, success, error
-  const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle'); // idle, loading, success, error
+  const [triggerStatus, setTriggerStatus] = useState('idle');
+  const [triggerLog, setTriggerLog] = useState([]);
+  const [intradayStatus, setIntradayStatus] = useState('idle');
+  const [intradayLog, setIntradayLog] = useState([]);
+  const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle');
   const [refreshLog, setRefreshLog] = useState([]);
 
   useEffect(() => {
@@ -67,27 +71,109 @@ function App() {
     setActiveChart(null); 
   };
 
-  // 🚀 NEW: Function to securely call the backend trigger
-  const handleTriggerEngine = () => {
+  const handleTriggerEngine = async () => {
     setTriggerStatus('loading');
-    fetch('https://algo-scanner-lnck.onrender.com/api/trigger-scan', {
-      method: 'POST'
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.status === "success") {
-        setTriggerStatus('success');
-        setTimeout(() => setTriggerStatus('idle'), 4000); // Reset after 4 seconds
-      } else {
-        console.error("Trigger Failed:", data.message);
-        setTriggerStatus('error');
-        setTimeout(() => setTriggerStatus('idle'), 4000);
-      }
-    })
-    .catch(err => {
-      console.error("Network Error:", err);
+    setTriggerLog([]);
+    const log = (msg) => setTriggerLog(prev => [...prev, msg]);
+
+    log('🚀 Triggering Full Data Fetch via GitHub Actions...');
+    try {
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-scan', { method: 'POST' });
+      const d = await r.json();
+      if (d.status !== 'success') { log(`❌ ${d.message}`); setTriggerStatus('error'); return; }
+    } catch (e) { log(`❌ Network error: ${e.message}`); setTriggerStatus('error'); return; }
+
+    log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
+    let lastId = 0;
+
+    const progressInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/scan-progress?since_id=${lastId}`);
+        const d = await r.json();
+        if (d.lines && d.lines.length > 0) {
+          d.lines.forEach(({ id, line }) => { log(line); lastId = id; });
+        }
+      } catch (_) {}
+    }, 3000);
+
+    await new Promise((resolve, reject) => {
+      const ghInterval = setInterval(async () => {
+        try {
+          const r = await fetch('https://algo-scanner-lnck.onrender.com/api/scan-status');
+          const d = await r.json();
+          if (d.status === 'completed') {
+            clearInterval(ghInterval);
+            setTimeout(async () => {
+              try {
+                const r2 = await fetch(`https://algo-scanner-lnck.onrender.com/api/scan-progress?since_id=${lastId}`);
+                const d2 = await r2.json();
+                if (d2.lines && d2.lines.length > 0) d2.lines.forEach(({ line }) => log(line));
+              } catch (_) {}
+              clearInterval(progressInterval);
+              d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+            }, 4000);
+          }
+        } catch (_) {}
+      }, 15000);
+    }).then(() => {
+      setTriggerStatus('success');
+    }).catch((e) => {
+      log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      clearInterval(progressInterval);
       setTriggerStatus('error');
-      setTimeout(() => setTriggerStatus('idle'), 4000);
+    });
+  };
+
+  const handleTriggerIntraday = async () => {
+    setIntradayStatus('loading');
+    setIntradayLog([]);
+    const log = (msg) => setIntradayLog(prev => [...prev, msg]);
+
+    log('⚡ Triggering Intraday Pulse via GitHub Actions...');
+    try {
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-intraday', { method: 'POST' });
+      const d = await r.json();
+      if (d.status !== 'success') { log(`❌ ${d.message}`); setIntradayStatus('error'); return; }
+    } catch (e) { log(`❌ Network error: ${e.message}`); setIntradayStatus('error'); return; }
+
+    log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
+    let lastId = 0;
+
+    const progressInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/intraday-progress?since_id=${lastId}`);
+        const d = await r.json();
+        if (d.lines && d.lines.length > 0) {
+          d.lines.forEach(({ id, line }) => { log(line); lastId = id; });
+        }
+      } catch (_) {}
+    }, 3000);
+
+    await new Promise((resolve, reject) => {
+      const ghInterval = setInterval(async () => {
+        try {
+          const r = await fetch('https://algo-scanner-lnck.onrender.com/api/intraday-status');
+          const d = await r.json();
+          if (d.status === 'completed') {
+            clearInterval(ghInterval);
+            setTimeout(async () => {
+              try {
+                const r2 = await fetch(`https://algo-scanner-lnck.onrender.com/api/intraday-progress?since_id=${lastId}`);
+                const d2 = await r2.json();
+                if (d2.lines && d2.lines.length > 0) d2.lines.forEach(({ line }) => log(line));
+              } catch (_) {}
+              clearInterval(progressInterval);
+              d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+            }, 4000);
+          }
+        } catch (_) {}
+      }, 15000);
+    }).then(() => {
+      setIntradayStatus('success');
+    }).catch((e) => {
+      log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      clearInterval(progressInterval);
+      setIntradayStatus('error');
     });
   };
 
@@ -270,39 +356,15 @@ function App() {
           <div style={{ display: 'flex', backgroundColor: t.bgApp, borderRadius: '8px', padding: '4px' }}>
             <button onClick={() => setActiveView('scanner')} style={{...tabStyle, backgroundColor: activeView === 'scanner' ? t.bgPanel : 'transparent', color: activeView === 'scanner' ? t.textMain : t.textMuted}}>📊 Scanner</button>
             <button onClick={() => setActiveView('heatmap')} style={{...tabStyle, backgroundColor: activeView === 'heatmap' ? t.bgPanel : 'transparent', color: activeView === 'heatmap' ? t.textMain : t.textMuted}}>🔥 Sectors</button>
-            <button onClick={() => setActiveView('industries')} style={{...tabStyle, backgroundColor: activeView === 'industries' ? t.bgPanel : 'transparent', color: activeView === 'industries' ? t.textMain : t.textMuted}}>🏭 Industries</button>
+            <button onClick={() => setActiveView('industries')} style={{...tabStyle, backgroundColor: activeView === 'industries' ? t.bgPanel : 'transparent', color: activeView === 'industries' ? t.textMain : t.textMuted}}>🏭 Macro Industries</button>
             <button onClick={() => setActiveView('micro')} style={{...tabStyle, backgroundColor: activeView === 'micro' ? t.bgPanel : 'transparent', color: activeView === 'micro' ? t.textMain : t.textMuted}}>🔬 Micro Industries</button>
+            <button onClick={() => setActiveView('directory')} style={{...tabStyle, backgroundColor: activeView === 'directory' ? t.bgPanel : 'transparent', color: activeView === 'directory' ? t.textMain : t.textMuted}}>📋 Stocks Directory</button>
             <button onClick={() => setActiveView('settings')} style={{...tabStyle, backgroundColor: activeView === 'settings' ? t.bgPanel : 'transparent', color: activeView === 'settings' ? t.textMain : t.textMuted}}>⚙️ Settings</button>
           </div>
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           
-          {/* 🚀 NEW: Manual Sync Button */}
-          <button 
-            onClick={handleTriggerEngine}
-            disabled={triggerStatus !== 'idle'}
-            style={{ 
-              padding: '6px 14px', 
-              borderRadius: '20px', 
-              backgroundColor: triggerStatus === 'loading' ? '#eab308' : triggerStatus === 'success' ? '#10b981' : triggerStatus === 'error' ? '#ef4444' : t.btnPrimaryBg, 
-              color: '#ffffff', 
-              border: 'none', 
-              cursor: triggerStatus === 'idle' ? 'pointer' : 'not-allowed', 
-              fontWeight: 'bold', 
-              fontSize: '12px',
-              transition: 'all 0.2s',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            {triggerStatus === 'idle' && '🔄 Sync Market Data'}
-            {triggerStatus === 'loading' && '⏳ Starting...'}
-            {triggerStatus === 'success' && '✅ Triggered!'}
-            {triggerStatus === 'error' && '❌ Failed'}
-          </button>
-
           <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} style={{ padding: '6px 12px', borderRadius: '20px', backgroundColor: t.bgApp, color: t.textMain, border: `1px solid ${t.border}`, cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}>
             {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
           </button>
@@ -482,10 +544,104 @@ function App() {
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
           <MicroIndustryHeatmap onScanNavigate={triggerScanFromHeatmap} theme={theme} />
         </div>
+      ) : activeView === 'directory' ? (
+        <StocksDirectory theme={theme} t={t} />
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, padding: '40px' }}>
           <div style={{ maxWidth: '600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '800', color: t.textMain }}>Settings</h2>
+
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Fyers API - Full Data Fetch</div>
+                <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
+                  Triggers the <strong>market_engine</strong> workflow on GitHub Actions. Fetches 364 days of OHLCV data from Fyers API for every NSE stock, computes EMA20/EMA50 crossovers, calculates RS scores against Nifty 50, detects 1H and 15M intraday pullbacks, and updates the database. Runs automatically after market close — use this to trigger it manually if needed.
+                </div>
+              </div>
+              <button
+                onClick={handleTriggerEngine}
+                disabled={triggerStatus !== 'idle'}
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: triggerStatus === 'idle' ? 'pointer' : 'not-allowed',
+                  transition: 'all 0.2s',
+                  backgroundColor:
+                    triggerStatus === 'loading' ? '#eab308' :
+                    triggerStatus === 'success' ? '#10b981' :
+                    triggerStatus === 'error'   ? '#ef4444' :
+                    t.btnPrimaryBg,
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                {triggerStatus === 'idle'    && '🔄 Sync Market Data'}
+                {triggerStatus === 'loading' && '⏳ Starting...'}
+                {triggerStatus === 'success' && '✅ Triggered!'}
+                {triggerStatus === 'error'   && '❌ Failed — Retry'}
+              </button>
+
+              {triggerLog.length > 0 && (
+                <div style={{ backgroundColor: theme === 'dark' ? '#020617' : '#0f172a', borderRadius: '8px', padding: '14px 16px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.8', maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {triggerLog.map((line, i) => (
+                    <div key={i} style={{ color: line.startsWith('❌') ? '#f87171' : line.startsWith('✅') || line.startsWith('🎉') ? '#4ade80' : line.startsWith('🎯') || line.startsWith('📊') || line.startsWith('📋') ? '#60a5fa' : line.startsWith('  ↳') || line.startsWith('  •') ? '#94a3b8' : line.startsWith('⚠️') ? '#fbbf24' : '#e2e8f0' }}>{line}</div>
+                  ))}
+                  {triggerStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
+                </div>
+              )}
+            </div>
+
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Intraday H &amp; 15 mins Cross</div>
+                <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
+                  Triggers the <strong>intraday_engine</strong> workflow on GitHub Actions. Scans only stocks with an active daily uptrend and detects the first EMA20/EMA50 bearish crossover on 1H and 15M timeframes — signalling a pullback entry opportunity. Runs automatically every hour during market hours — use this to trigger it manually if needed.
+                </div>
+              </div>
+              <button
+                onClick={handleTriggerIntraday}
+                disabled={intradayStatus !== 'idle'}
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: intradayStatus === 'idle' ? 'pointer' : 'not-allowed',
+                  transition: 'all 0.2s',
+                  backgroundColor:
+                    intradayStatus === 'loading' ? '#eab308' :
+                    intradayStatus === 'success' ? '#10b981' :
+                    intradayStatus === 'error'   ? '#ef4444' :
+                    t.btnPrimaryBg,
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                {intradayStatus === 'idle'    && '⚡ Run Intraday Pulse'}
+                {intradayStatus === 'loading' && '⏳ Starting...'}
+                {intradayStatus === 'success' && '✅ Triggered!'}
+                {intradayStatus === 'error'   && '❌ Failed — Retry'}
+              </button>
+
+              {intradayLog.length > 0 && (
+                <div style={{ backgroundColor: theme === 'dark' ? '#020617' : '#0f172a', borderRadius: '8px', padding: '14px 16px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.8', maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {intradayLog.map((line, i) => (
+                    <div key={i} style={{ color: line.startsWith('❌') ? '#f87171' : line.startsWith('✅') || line.startsWith('🎉') ? '#4ade80' : line.startsWith('🚨') || line.startsWith('📊') || line.startsWith('⚡') ? '#60a5fa' : line.startsWith('  ↳') ? '#94a3b8' : line.startsWith('⚠️') ? '#fbbf24' : '#e2e8f0' }}>{line}</div>
+                  ))}
+                  {intradayStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
+                </div>
+              )}
+            </div>
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
