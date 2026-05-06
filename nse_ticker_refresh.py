@@ -328,20 +328,38 @@ def main():
         'UTILITIES':           'Utilities',
         'DIVERSIFIED':         'Diversified',
     }
-    log_progress("🔧 [5/5] Normalizing sector casing in DB...")
+    INDUSTRY_NORMALIZE = {
+        'AUTO ANCILLARIES':                                   'Auto Components',
+        'CONSTRUCTION':                                       'Construction',
+        'HEALTHCARE SERVICES':                                'Healthcare Services',
+        'HOTELS/ RESORTS AND OTHER RECREATIONAL ACTIVITIES':  'Leisure Services',
+        'TRADING':                                            'Commercial Services & Supplies',
+    }
+
+    BASIC_INDUSTRY_NORMALIZE = {
+        'HOTELS/RESORTS':                   'Hotels & Resorts',
+        'AUTO ANCILLARIES':                 'Auto Components & Equipments',
+        'HOSPITAL':                         'Hospital',
+        'TRADING':                          'Trading & Distributors',
+        'RESIDENTIAL/COMMERCIAL/SEZ Project': 'Residential Commercial Projects',
+    }
+
+    log_progress("🔧 [5/5] Normalizing sector, industry & basic_industry casing in DB...")
     normalized = 0
-    for bad, good in SECTOR_NORMALIZE.items():
-        cur = conn.cursor()
-        cur.execute("UPDATE stocks SET sector = %s WHERE sector = %s", (good, bad))
-        if cur.rowcount:
-            log_progress(f"  ↳ Fixed '{bad}' → '{good}' ({cur.rowcount} rows)")
-            normalized += cur.rowcount
-        conn.commit()
-        cur.close()
+
+    for column, mapping in [('sector', SECTOR_NORMALIZE), ('industry', INDUSTRY_NORMALIZE), ('basic_industry', BASIC_INDUSTRY_NORMALIZE)]:
+        for bad, good in mapping.items():
+            cur = conn.cursor()
+            cur.execute(f"UPDATE stocks SET {column} = %s WHERE {column} = %s", (good, bad))
+            if cur.rowcount:
+                log_progress(f"  ↳ Fixed {column}: '{bad}' → '{good}' ({cur.rowcount} rows)")
+                normalized += cur.rowcount
+            conn.commit()
+            cur.close()
 
     cur.close()
     conn.close()
-    log_progress(f"✅ {updated} rows updated in DB | {normalized} sector name(s) normalized")
+    log_progress(f"✅ {updated} rows updated in DB | {normalized} classification name(s) normalized")
     log_progress(f"🎉 Done — {total} synced, {len(classified)} classified, {deleted} removed")
 
 
