@@ -141,17 +141,48 @@ def run_daily_scan():
 
     print(f"🚀 Phase 2: Limit-Proof Technical Scan Started for {len(stocks)} stocks...")
 
+    # Priority order: EQ, BE, BZ first; then remaining equity series as fallback
+    SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
+
+    failed_stocks = []  # tracks symbols that could not be fetched after all fallbacks
+
     for stock_id, symbol, db_daily_active, db_daily_date, db_first_1h_time, db_first_15m_time in tqdm(stocks):
         try:
+            range_from = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
+            range_to = today_ist.strftime("%Y-%m-%d")
+
             res = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
-                                      "range_from": (today_ist - timedelta(days=364)).strftime("%Y-%m-%d"),
-                                      "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
-            
-            if not isinstance(res, dict) or "candles" not in res or not res["candles"]: 
-                continue
-            
+                                      "range_from": range_from, "range_to": range_to, "cont_flag": "1"})
+
+            # --- SERIES FALLBACK ENGINE ---
+            if not isinstance(res, dict) or "candles" not in res or not res["candles"]:
+                ticker_base = symbol.rsplit("-", 1)[0]  # e.g. "NSE:RELIANCE"
+                current_series = symbol.rsplit("-", 1)[-1]  # e.g. "EQ"
+                series_to_try = [s for s in SERIES_PRIORITY if s != current_series]
+
+                resolved_symbol = None
+                for series in series_to_try:
+                    candidate = f"{ticker_base}-{series}"
+                    tqdm.write(f"🔄 Series fallback: trying {candidate} for {symbol}")
+                    fallback_res = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
+                                                      "range_from": range_from, "range_to": range_to, "cont_flag": "1"})
+                    if isinstance(fallback_res, dict) and "candles" in fallback_res and fallback_res["candles"]:
+                        res = fallback_res
+                        resolved_symbol = candidate
+                        break
+
+                if resolved_symbol:
+                    cursor.execute("UPDATE stocks SET fyers_symbol = %s WHERE id = %s", (resolved_symbol, stock_id))
+                    conn.commit()
+                    symbol = resolved_symbol
+                    tqdm.write(f"✅ Series fixed: {symbol} saved to DB permanently")
+                else:
+                    tqdm.write(f"❌ All series exhausted for {symbol}. Skipping.")
+                    failed_stocks.append(symbol)
+                    continue
+
             df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
-            if len(df) < 10: continue
+            if len(df) < 56: continue
             
             bars = min(len(df), 56)
             s_curr, s_past = df['close'].iloc[-1], df['close'].iloc[-bars]
@@ -234,13 +265,23 @@ def run_daily_scan():
 
         except Exception as e:
             tqdm.write(f"❌ Error on {symbol}: {e}")
+            failed_stocks.append(symbol)
             conn.rollback()
-            
+
         finally:
-            time.sleep(0.25) 
+            time.sleep(0.25)
 
     cursor.close()
     conn.close()
+
+    print("\n" + "="*60)
+    if failed_stocks:
+        print(f"⚠️  FAILED STOCKS SUMMARY: {len(failed_stocks)} stock(s) could not be fetched")
+        for s in failed_stocks:
+            print(f"   • {s}")
+    else:
+        print("✅ All stocks fetched successfully. No failures.")
+    print("="*60)
     print("✅ Limit-Proof Cloud Scan Complete. Database fully synchronized!")
 
 if __name__ == "__main__":
