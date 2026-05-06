@@ -9,7 +9,6 @@ function Checkbox({ checked, indeterminate, accentColor }) {
       backgroundColor: checked ? accentColor : 'transparent',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       transition: 'all 0.15s',
-      pointerEvents: 'none',
     }}>
       {checked && <span style={{ color: '#fff', fontSize: '10px', fontWeight: '900', lineHeight: 1 }}>✓</span>}
       {indeterminate && !checked && <span style={{ color: accentColor, fontSize: '12px', fontWeight: '900', lineHeight: 1, marginTop: '-1px' }}>−</span>}
@@ -22,8 +21,7 @@ function Chevron({ open }) {
     <span style={{
       display: 'inline-block', fontSize: '9px',
       transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
-      transition: 'transform 0.2s', color: '#94a3b8', lineHeight: 1, flexShrink: 0,
-      pointerEvents: 'none',
+      transition: 'transform 0.2s', color: '#94a3b8', lineHeight: 1,
     }}>▶</span>
   );
 }
@@ -53,24 +51,32 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
 
   const searchActive = searchTerm.trim().length > 0;
 
-  const toggleMicro = (e, micro) => {
-    e.stopPropagation();
-    const next = new Set(selected);
-    next.has(micro) ? next.delete(micro) : next.add(micro);
-    onChange(next);
-  };
+  // Build a flat list of rows to render — avoids all nesting/bubbling issues
+  const rows = useMemo(() => {
+    const list = [];
+    Object.entries(filteredTree).forEach(([sector, macros]) => {
+      const allMicrosInSector = Object.values(macros).flat();
+      list.push({ type: 'sector', sector, macros, allMicros: allMicrosInSector });
 
-  const toggleMacro = (e, micros) => {
-    e.stopPropagation();
-    const allSel = micros.every(mi => selected.has(mi));
-    const next = new Set(selected);
-    if (allSel) micros.forEach(mi => next.delete(mi));
-    else micros.forEach(mi => next.add(mi));
-    onChange(next);
-  };
+      const isSectorOpen = searchActive ? true : !!openSectors[sector];
+      if (!isSectorOpen) return;
 
-  const toggleSector = (e, macros) => {
-    e.stopPropagation();
+      Object.entries(macros).forEach(([macro, micros]) => {
+        const macroKey = `${sector}__${macro}`;
+        list.push({ type: 'macro', sector, macro, micros, macroKey });
+
+        const isMacroOpen = searchActive ? true : !!openMacros[macroKey];
+        if (!isMacroOpen) return;
+
+        micros.forEach(micro => {
+          list.push({ type: 'micro', micro });
+        });
+      });
+    });
+    return list;
+  }, [filteredTree, openSectors, openMacros, searchActive]);
+
+  const handleSectorToggle = (macros) => {
     const all = Object.values(macros).flat();
     const allSel = all.every(mi => selected.has(mi));
     const next = new Set(selected);
@@ -79,133 +85,124 @@ export default function FilterTree({ tree, selected, onChange, t, theme, searchT
     onChange(next);
   };
 
-  const toggleSectorOpen = (e, sector) => {
-    e.stopPropagation();
-    setOpenSectors(prev => ({ ...prev, [sector]: !prev[sector] }));
+  const handleMacroToggle = (micros) => {
+    const allSel = micros.every(mi => selected.has(mi));
+    const next = new Set(selected);
+    if (allSel) micros.forEach(mi => next.delete(mi));
+    else micros.forEach(mi => next.add(mi));
+    onChange(next);
   };
 
-  const toggleMacroOpen = (e, key) => {
-    e.stopPropagation();
-    setOpenMacros(prev => ({ ...prev, [key]: !prev[key] }));
+  const handleMicroToggle = (micro) => {
+    const next = new Set(selected);
+    next.has(micro) ? next.delete(micro) : next.add(micro);
+    onChange(next);
+  };
+
+  const rowBase = {
+    display: 'flex', alignItems: 'center', borderRadius: '5px',
+    userSelect: 'none', transition: 'background-color 0.12s',
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      {Object.entries(filteredTree).map(([sector, macros]) => {
-        const allMicrosInSector = Object.values(macros).flat();
-        const selCount     = allMicrosInSector.filter(mi => selected.has(mi)).length;
-        const sectorChecked = selCount === allMicrosInSector.length && allMicrosInSector.length > 0;
-        const sectorIndet  = selCount > 0 && !sectorChecked;
-        const isSectorOpen = searchActive ? true : !!openSectors[sector];
+      {rows.map((row, idx) => {
 
-        return (
-          <div key={sector}>
-            {/* ── SECTOR ROW ── */}
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', gap: '4px',
-                padding: '7px 12px', borderRadius: '5px', userSelect: 'none',
-                backgroundColor: sectorChecked ? (theme === 'dark' ? 'rgba(59,130,246,0.12)' : '#eff6ff') : 'transparent',
-                transition: 'background-color 0.12s',
-              }}
-              onMouseEnter={e => { if (!sectorChecked) e.currentTarget.style.backgroundColor = t.hover; }}
-              onMouseLeave={e => { e.currentTarget.style.backgroundColor = sectorChecked ? (theme === 'dark' ? 'rgba(59,130,246,0.12)' : '#eff6ff') : 'transparent'; }}
+        if (row.type === 'sector') {
+          const { sector, macros, allMicros } = row;
+          const selCount     = allMicros.filter(mi => selected.has(mi)).length;
+          const checked      = selCount === allMicros.length && allMicros.length > 0;
+          const indeterminate = selCount > 0 && !checked;
+          const isOpen       = searchActive ? true : !!openSectors[sector];
+          const bg           = checked ? (theme === 'dark' ? 'rgba(59,130,246,0.12)' : '#eff6ff') : 'transparent';
+
+          return (
+            <div key={`sector-${sector}`} style={{ ...rowBase, padding: '7px 12px', gap: '4px', backgroundColor: bg }}
+              onMouseEnter={e => { if (!checked) e.currentTarget.style.backgroundColor = t.hover; }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
             >
-              {/* Chevron: only opens/closes */}
-              <button
-                onClick={e => toggleSectorOpen(e, sector)}
-                style={{ background: 'none', border: 'none', padding: '2px 4px 2px 0', cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+              {/* Chevron — open/close only */}
+              <div
+                onClick={() => setOpenSectors(prev => ({ ...prev, [sector]: !prev[sector] }))}
+                style={{ padding: '2px 6px 2px 0', cursor: 'pointer', flexShrink: 0 }}
               >
-                <Chevron open={isSectorOpen} />
-              </button>
-
-              {/* Checkbox + label: only toggles selection */}
-              <button
-                onClick={e => toggleSector(e, macros)}
-                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, textAlign: 'left' }}
+                <Chevron open={isOpen} />
+              </div>
+              {/* Checkbox — toggle selection only */}
+              <div
+                onClick={() => handleSectorToggle(macros)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, cursor: 'pointer' }}
               >
-                <Checkbox checked={sectorChecked} indeterminate={sectorIndet} accentColor={accentColor} />
+                <Checkbox checked={checked} indeterminate={indeterminate} accentColor={accentColor} />
                 <span style={{ fontWeight: '700', fontSize: '13px', color: t.textMain, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {sector}
                 </span>
-              </button>
-
+              </div>
               {selCount > 0 && (
                 <span style={{ fontSize: '10px', fontWeight: '800', color: accentColor, backgroundColor: theme === 'dark' ? 'rgba(59,130,246,0.2)' : '#dbeafe', borderRadius: '10px', padding: '1px 6px', flexShrink: 0 }}>
                   {selCount}
                 </span>
               )}
             </div>
+          );
+        }
 
-            {/* ── MACRO ROWS ── */}
-            {isSectorOpen && Object.entries(macros).map(([macro, micros]) => {
-              const macroSelCount = micros.filter(mi => selected.has(mi)).length;
-              const macroChecked  = macroSelCount === micros.length && micros.length > 0;
-              const macroIndet    = macroSelCount > 0 && !macroChecked;
-              const macroKey      = `${sector}__${macro}`;
-              const isMacroOpen   = searchActive ? true : !!openMacros[macroKey];
+        if (row.type === 'macro') {
+          const { macro, micros, macroKey, sector } = row;
+          const selCount      = micros.filter(mi => selected.has(mi)).length;
+          const checked       = selCount === micros.length && micros.length > 0;
+          const indeterminate = selCount > 0 && !checked;
+          const isOpen        = searchActive ? true : !!openMacros[macroKey];
+          const bg            = checked ? (theme === 'dark' ? 'rgba(59,130,246,0.08)' : '#f0f7ff') : 'transparent';
 
-              return (
-                <div key={macroKey}>
-                  <div
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '4px',
-                      padding: '5px 12px 5px 20px', borderRadius: '5px', userSelect: 'none',
-                      backgroundColor: macroChecked ? (theme === 'dark' ? 'rgba(59,130,246,0.08)' : '#f0f7ff') : 'transparent',
-                      transition: 'background-color 0.12s',
-                    }}
-                    onMouseEnter={e => { if (!macroChecked) e.currentTarget.style.backgroundColor = t.hover; }}
-                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = macroChecked ? (theme === 'dark' ? 'rgba(59,130,246,0.08)' : '#f0f7ff') : 'transparent'; }}
-                  >
-                    {/* Chevron: only opens/closes */}
-                    <button
-                      onClick={e => toggleMacroOpen(e, macroKey)}
-                      style={{ background: 'none', border: 'none', padding: '2px 4px 2px 0', cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0 }}
-                    >
-                      <Chevron open={isMacroOpen} />
-                    </button>
+          return (
+            <div key={`macro-${macroKey}`} style={{ ...rowBase, padding: '5px 12px 5px 20px', gap: '4px', backgroundColor: bg }}
+              onMouseEnter={e => { if (!checked) e.currentTarget.style.backgroundColor = t.hover; }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
+            >
+              {/* Chevron — open/close only */}
+              <div
+                onClick={() => setOpenMacros(prev => ({ ...prev, [macroKey]: !prev[macroKey] }))}
+                style={{ padding: '2px 6px 2px 0', cursor: 'pointer', flexShrink: 0 }}
+              >
+                <Chevron open={isOpen} />
+              </div>
+              {/* Checkbox — toggle selection only */}
+              <div
+                onClick={() => handleMacroToggle(micros)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, cursor: 'pointer' }}
+              >
+                <Checkbox checked={checked} indeterminate={indeterminate} accentColor={accentColor} />
+                <span style={{ fontWeight: '600', fontSize: '12px', color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {macro}
+                </span>
+              </div>
+            </div>
+          );
+        }
 
-                    {/* Checkbox + label: only toggles selection */}
-                    <button
-                      onClick={e => toggleMacro(e, micros)}
-                      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, textAlign: 'left' }}
-                    >
-                      <Checkbox checked={macroChecked} indeterminate={macroIndet} accentColor={accentColor} />
-                      <span style={{ fontWeight: '600', fontSize: '12px', color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {macro}
-                      </span>
-                    </button>
-                  </div>
+        if (row.type === 'micro') {
+          const { micro } = row;
+          const isSelected = selected.has(micro);
+          const bg = isSelected ? (theme === 'dark' ? 'rgba(59,130,246,0.1)' : '#eff6ff') : 'transparent';
 
-                  {/* ── MICRO ROWS ── */}
-                  {isMacroOpen && micros.map(micro => {
-                    const isSelected = selected.has(micro);
-                    return (
-                      <button
-                        key={micro}
-                        onClick={e => toggleMicro(e, micro)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: '7px',
-                          padding: '4px 12px 4px 44px', borderRadius: '5px',
-                          width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
-                          backgroundColor: isSelected ? (theme === 'dark' ? 'rgba(59,130,246,0.1)' : '#eff6ff') : 'transparent',
-                          transition: 'background-color 0.12s', userSelect: 'none',
-                        }}
-                        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = t.hover; }}
-                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = isSelected ? (theme === 'dark' ? 'rgba(59,130,246,0.1)' : '#eff6ff') : 'transparent'; }}
-                      >
-                        <Checkbox checked={isSelected} indeterminate={false} accentColor={accentColor} />
-                        <span style={{ fontSize: '12px', color: isSelected ? accentColor : t.textMuted, fontWeight: isSelected ? '600' : '400', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {micro}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        );
+          return (
+            <div
+              key={`micro-${micro}`}
+              onClick={() => handleMicroToggle(micro)}
+              style={{ ...rowBase, padding: '4px 12px 4px 44px', gap: '7px', cursor: 'pointer', backgroundColor: bg }}
+              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = t.hover; }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = bg; }}
+            >
+              <Checkbox checked={isSelected} indeterminate={false} accentColor={accentColor} />
+              <span style={{ fontSize: '12px', color: isSelected ? accentColor : t.textMuted, fontWeight: isSelected ? '600' : '400', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {micro}
+              </span>
+            </div>
+          );
+        }
+
+        return null;
       })}
     </div>
   );
