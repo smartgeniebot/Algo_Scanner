@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api-connect-docs.fyers.in)",
+      "WebFetch(domain:fyers.in)",
+      "WebFetch(domain:community.fyers.in)"
+    ]
+  }
+}

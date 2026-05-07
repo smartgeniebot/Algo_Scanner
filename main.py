@@ -13,6 +13,7 @@ import time
 import json
 import zipfile
 import requests
+from pathlib import Path
 
 app = FastAPI(title="Algo Scanner Cloud API")
 
@@ -545,6 +546,36 @@ async def get_delivery_bulk(request: dict):
         return {"status": "success", "data": result}
     except Exception as e:
         return {"status": "error", "data": {}, "message": str(e)}
+
+
+class WatchlistRequest(BaseModel):
+    symbols: List[str]
+
+
+@app.post("/api/fyers-watchlist")
+async def fyers_watchlist(request: WatchlistRequest):
+    """
+    Accepts the current scan result symbols and launches fyers_watchlist_sync.py
+    as a detached subprocess that opens a browser for the user to log in and import.
+    """
+    import subprocess
+    import sys
+
+    symbols = [s.strip() for s in request.symbols if s.strip()]
+    if not symbols:
+        return {"status": "error", "message": "No symbols provided"}
+
+    symbols_arg = ",".join(symbols)
+    script = Path(__file__).parent / "fyers_watchlist_sync.py"
+
+    try:
+        subprocess.Popen(
+            [sys.executable, str(script), "--symbols", symbols_arg],
+            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+        )
+        return {"status": "success", "message": f"Watchlist sync launched for {len(symbols)} symbols"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":
