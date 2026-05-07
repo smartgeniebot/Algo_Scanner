@@ -171,7 +171,7 @@ def run_daily_scan():
     """)
     conn.commit()
 
-    cursor.execute("SELECT id, fyers_symbol, daily_cross_active, daily_cross_date, first_1h_cross_time, first_15m_cross_time FROM stocks")
+    cursor.execute("SELECT id, fyers_symbol, daily_cross_active, daily_cross_date FROM stocks")
     stocks = cursor.fetchall()
 
     log_progress(cursor, conn, f"📊 Phase 2: Technical Scan Started for {len(stocks)} stocks...")
@@ -195,7 +195,7 @@ def run_daily_scan():
         conn.commit()
         pending_updates.clear()
 
-    for stock_id, symbol, db_daily_active, db_daily_date, db_first_1h_time, db_first_15m_time in tqdm(stocks):
+    for stock_id, symbol, db_daily_active, db_daily_date in tqdm(stocks):
         try:
             # Fyers hard limit is 366 days for 1D resolution → ~53 weekly candles after resample
             range_from = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
@@ -275,37 +275,32 @@ def run_daily_scan():
                             new_active = "Yes"
                             new_date = last_dt.strftime('%Y-%m-%d')
 
-                            if new_date == db_daily_date:
-                                new_1h = db_first_1h_time
-                                new_15m = db_first_15m_time
-
                             fetch_days = min(days_active + 25, 95)
                             from_dt_intra = (today_ist - timedelta(days=fetch_days)).strftime("%Y-%m-%d")
                             to_dt_intra = today_ist.strftime("%Y-%m-%d")
 
-                            if not new_1h:
-                                res_60 = fetch_safe(fyers, {"symbol": symbol, "resolution": "60", "date_format": "1",
-                                                             "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
-                                if isinstance(res_60, dict) and "candles" in res_60 and len(res_60["candles"]) >= 50:
-                                    df60 = pd.DataFrame(res_60['candles'], columns=['date','open','high','low','close','vol'])
-                                    df60['E20'], df60['E50'] = ta.ema(df60['close'], 20), ta.ema(df60['close'], 50)
-                                    df60['P20'], df60['P50'] = df60['E20'].shift(1), df60['E50'].shift(1)
-                                    c_60 = df60[(df60['E20'] < df60['E50']) & (df60['P20'] >= df60['P50'])]
-                                    c_60 = c_60[c_60['date'] >= daily_cross_epoch]
-                                    if not c_60.empty:
-                                        new_1h = datetime.fromtimestamp(int(float(c_60['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
+                            # Always recalculate — never reuse cached DB values (stale data risk)
+                            res_60 = fetch_safe(fyers, {"symbol": symbol, "resolution": "60", "date_format": "1",
+                                                         "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
+                            if isinstance(res_60, dict) and "candles" in res_60 and len(res_60["candles"]) >= 50:
+                                df60 = pd.DataFrame(res_60['candles'], columns=['date','open','high','low','close','vol'])
+                                df60['E20'], df60['E50'] = ta.ema(df60['close'], 20), ta.ema(df60['close'], 50)
+                                df60['P20'], df60['P50'] = df60['E20'].shift(1), df60['E50'].shift(1)
+                                c_60 = df60[(df60['E20'] < df60['E50']) & (df60['P20'] >= df60['P50'])]
+                                c_60 = c_60[c_60['date'] >= daily_cross_epoch]
+                                if not c_60.empty:
+                                    new_1h = datetime.fromtimestamp(int(float(c_60['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
 
-                            if not new_15m:
-                                res_15 = fetch_safe(fyers, {"symbol": symbol, "resolution": "15", "date_format": "1",
-                                                             "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
-                                if isinstance(res_15, dict) and "candles" in res_15 and len(res_15["candles"]) >= 50:
-                                    df15 = pd.DataFrame(res_15['candles'], columns=['date','open','high','low','close','vol'])
-                                    df15['E20'], df15['E50'] = ta.ema(df15['close'], 20), ta.ema(df15['close'], 50)
-                                    df15['P20'], df15['P50'] = df15['E20'].shift(1), df15['E50'].shift(1)
-                                    c_15 = df15[(df15['E20'] < df15['E50']) & (df15['P20'] >= df15['P50'])]
-                                    c_15 = c_15[c_15['date'] >= daily_cross_epoch]
-                                    if not c_15.empty:
-                                        new_15m = datetime.fromtimestamp(int(float(c_15['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
+                            res_15 = fetch_safe(fyers, {"symbol": symbol, "resolution": "15", "date_format": "1",
+                                                         "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
+                            if isinstance(res_15, dict) and "candles" in res_15 and len(res_15["candles"]) >= 50:
+                                df15 = pd.DataFrame(res_15['candles'], columns=['date','open','high','low','close','vol'])
+                                df15['E20'], df15['E50'] = ta.ema(df15['close'], 20), ta.ema(df15['close'], 50)
+                                df15['P20'], df15['P50'] = df15['E20'].shift(1), df15['E50'].shift(1)
+                                c_15 = df15[(df15['E20'] < df15['E50']) & (df15['P20'] >= df15['P50'])]
+                                c_15 = c_15[c_15['date'] >= daily_cross_epoch]
+                                if not c_15.empty:
+                                    new_15m = datetime.fromtimestamp(int(float(c_15['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
 
             pending_updates.append((rs_val, new_active, new_date, new_1h, new_15m, new_weekly_bullish, stock_id))
             if len(pending_updates) >= BATCH_SIZE:
