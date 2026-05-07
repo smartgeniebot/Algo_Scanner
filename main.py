@@ -511,25 +511,34 @@ async def bhavcopy_status():
     return _get_workflow_status("bhavcopy_engine.yml")
 
 
-@app.get("/api/delivery-data")
-async def get_delivery_data(symbol: str):
-    """Returns last 14 days of delivery % for a given NSE symbol (e.g. RELIANCE)."""
+@app.post("/api/delivery-bulk")
+async def get_delivery_bulk(request: dict):
+    """Returns 14-day delivery % for a list of NSE symbols in one query."""
+    symbols = [s.upper() for s in request.get("symbols", []) if s]
+    if not symbols:
+        return {"status": "success", "data": {}}
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("""
-            SELECT trade_date, delivery_pct
+        placeholders = ','.join(['%s'] * len(symbols))
+        cursor.execute(f"""
+            SELECT symbol, trade_date, delivery_pct
             FROM delivery_data
-            WHERE symbol = %s
-            ORDER BY trade_date ASC
-            LIMIT 14
-        """, (symbol.upper(),))
+            WHERE symbol IN ({placeholders})
+            ORDER BY symbol, trade_date ASC
+        """, symbols)
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
-        return {"status": "success", "data": [{"date": str(r["trade_date"]), "pct": float(r["delivery_pct"])} for r in rows]}
+        result = {}
+        for r in rows:
+            sym = r["symbol"]
+            if sym not in result:
+                result[sym] = []
+            result[sym].append({"date": str(r["trade_date"]), "pct": float(r["delivery_pct"])})
+        return {"status": "success", "data": result}
     except Exception as e:
-        return {"status": "error", "data": [], "message": str(e)}
+        return {"status": "error", "data": {}, "message": str(e)}
 
 
 if __name__ == "__main__":

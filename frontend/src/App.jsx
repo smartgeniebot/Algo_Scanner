@@ -43,16 +43,18 @@ function App() {
       .filter(Boolean);
     const uncached = tickers.filter(t => !(t in deliveryCache));
     if (uncached.length === 0) return;
-    uncached.forEach(ticker => {
-      fetch(`https://algo-scanner-lnck.onrender.com/api/delivery-data?symbol=${ticker}`)
-        .then(r => r.json())
-        .then(d => {
-          if (d.status === 'success') {
-            setDeliveryCache(prev => ({ ...prev, [ticker]: d.data }));
-          }
-        })
-        .catch(() => {});
-    });
+    fetch('https://algo-scanner-lnck.onrender.com/api/delivery-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols: uncached })
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.status === 'success') {
+          setDeliveryCache(prev => ({ ...prev, ...d.data }));
+        }
+      })
+      .catch(() => {});
   }, [stocks]);
 
   const doScan = (micros, fundamentals) => {
