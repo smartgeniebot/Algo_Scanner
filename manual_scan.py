@@ -197,6 +197,7 @@ def run_daily_scan():
 
     for stock_id, symbol, db_daily_active, db_daily_date, db_first_1h_time, db_first_15m_time in tqdm(stocks):
         try:
+            # Fyers hard limit is 366 days for 1D resolution → ~53 weekly candles after resample
             range_from = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
             range_to = today_ist.strftime("%Y-%m-%d")
 
