@@ -782,7 +782,7 @@ function App() {
               <div>
                 <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>NSE Stock Universe</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Syncs all NSE-listed stocks from <strong>EQUITY_L.csv</strong> into the database via GitHub Actions. Sector &amp; industry come from <strong>nse_classifications.json</strong> (run <code>fetch_classifications.py</code> locally once a month and push). Delisted stocks are removed automatically.
+                  Downloads the full NSE equity list from <strong>EQUITY_L.csv</strong>, fetches sector, industry &amp; basic industry for every stock live from the <strong>NSE quote API</strong>, and syncs everything into the database. Delisted stocks are removed automatically. Run this once a month to keep the stock universe current.
                 </div>
               </div>
 
