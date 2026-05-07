@@ -1071,9 +1071,11 @@ const TVChart = ({ symbol, theme }) => {
     const container = document.getElementById(containerId);
     if (container) container.innerHTML = '';
 
+    let widget = null;
+
     const initWidget = () => {
       if (!window.TradingView) return;
-      new window.TradingView.widget({
+      widget = new window.TradingView.widget({
         autosize: true,
         symbol: symbol,
         interval: "D",
@@ -1086,26 +1088,13 @@ const TVChart = ({ symbol, theme }) => {
         hide_legend: false,
         save_image: false,
         container_id: containerId,
-        studies: [
-          {
-            id: "MAExp@tv-basicstudies",
-            version: 1,
-            inputs: { length: 20, source: "close" },
-            styles: { plot_0: { linestyle: 0, linewidth: 2, plottype: 0, trackPrice: false, transparency: 0, visible: true, color: "#f97316" } }
-          },
-          {
-            id: "MAExp@tv-basicstudies",
-            version: 1,
-            inputs: { length: 50, source: "close" },
-            styles: { plot_0: { linestyle: 0, linewidth: 2, plottype: 0, trackPrice: false, transparency: 0, visible: true, color: "#3b82f6" } }
-          },
-          {
-            id: "MASimple@tv-basicstudies",
-            version: 1,
-            inputs: { length: 200, source: "close" },
-            styles: { plot_0: { linestyle: 0, linewidth: 2, plottype: 0, trackPrice: false, transparency: 0, visible: true, color: "#000000" } }
-          }
-        ]
+      });
+
+      widget.onChartReady(() => {
+        const chart = widget.activeChart();
+        chart.createStudy('Moving Average Exponential', false, false, { length: 20 }, { 'Plot.color': '#f97316', 'Plot.linewidth': 2 });
+        chart.createStudy('Moving Average Exponential', false, false, { length: 50 }, { 'Plot.color': '#3b82f6', 'Plot.linewidth': 2 });
+        chart.createStudy('Moving Average', false, false, { length: 200 }, { 'Plot.color': '#000000', 'Plot.linewidth': 2 });
       });
     };
 
@@ -1124,6 +1113,16 @@ const TVChart = ({ symbol, theme }) => {
     } else {
       initWidget();
     }
+
+    return () => {
+      if (widget && typeof widget.remove === 'function') {
+        widget.remove();
+      } else {
+        const c = document.getElementById(containerId);
+        if (c) c.innerHTML = '';
+      }
+      widget = null;
+    };
   }, [symbol, theme]);
 
   return <div id={containerId} style={{ width: '100%', height: '100%' }} />;
