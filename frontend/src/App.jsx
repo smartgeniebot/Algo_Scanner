@@ -897,8 +897,15 @@ const DeliverySparkline = ({ data, theme }) => {
     return `${x},${y}`;
   }).join(' ');
   const last = vals[vals.length - 1];
-  const prev = vals[vals.length - 2] ?? last;
-  const color = last >= prev ? '#10b981' : '#f87171';
+
+  // Linear regression slope to determine overall trend direction
+  const n = vals.length;
+  const meanX = (n - 1) / 2;
+  const meanY = vals.reduce((a, b) => a + b, 0) / n;
+  const slope = vals.reduce((sum, v, i) => sum + (i - meanX) * (v - meanY), 0) /
+                vals.reduce((sum, _, i) => sum + (i - meanX) ** 2, 0);
+  const color = slope >= 0 ? '#10b981' : '#f87171';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
       <svg width={w} height={h} style={{ overflow: 'visible' }}>
