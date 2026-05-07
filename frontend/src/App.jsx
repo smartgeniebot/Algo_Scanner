@@ -716,53 +716,24 @@ function App() {
                 </div>
               </div>
 
-              {activeChart && (() => {
-                const activeIdx = sortedStocks.findIndex(s => {
-                  const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
-                  return `BSE:${cleanTicker}` === activeChart;
-                });
-                const navTo = (idx) => {
-                  const s = sortedStocks[idx];
-                  if (!s) return;
-                  const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
-                  if (cleanTicker) setActiveChart(`BSE:${cleanTicker}`);
-                };
-                return (
-                  <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
-                    <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ display: 'flex', gap: '4px' }}>
-                          <button
-                            onClick={() => navTo(activeIdx - 1)}
-                            disabled={activeIdx <= 0}
-                            title="Previous stock"
-                            style={{ padding: '3px 8px', borderRadius: '4px', border: `1px solid ${t.border}`, backgroundColor: t.bgPanel, color: activeIdx <= 0 ? t.textMuted : t.textMain, cursor: activeIdx <= 0 ? 'not-allowed' : 'pointer', fontSize: '14px', lineHeight: 1 }}
-                          >▲</button>
-                          <button
-                            onClick={() => navTo(activeIdx + 1)}
-                            disabled={activeIdx >= sortedStocks.length - 1}
-                            title="Next stock"
-                            style={{ padding: '3px 8px', borderRadius: '4px', border: `1px solid ${t.border}`, backgroundColor: t.bgPanel, color: activeIdx >= sortedStocks.length - 1 ? t.textMuted : t.textMain, cursor: activeIdx >= sortedStocks.length - 1 ? 'not-allowed' : 'pointer', fontSize: '14px', lineHeight: 1 }}
-                          >▼</button>
-                        </div>
-                        <div style={{ fontWeight: '800', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                          📊 {activeChart.replace('BSE:', '')}
-                          {sortedStocks.length > 0 && <span style={{ fontSize: '11px', color: t.textMuted, fontWeight: '600' }}>{activeIdx + 1} / {sortedStocks.length}</span>}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setActiveChart(null)}
-                        style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
-                      >
-                        Close Split View ✖
-                      </button>
+              {activeChart && (
+                <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
+                  <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
+                    <div style={{ fontWeight: '800', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                      📊 {activeChart.replace('BSE:', '')}
                     </div>
-                    <div style={{ flex: 1, position: 'relative' }}>
-                      <TVChart symbol={activeChart} theme={theme} />
-                    </div>
+                    <button
+                      onClick={() => setActiveChart(null)}
+                      style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                    >
+                      Close Split View ✖
+                    </button>
                   </div>
-                );
-              })()}
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <TVChart key={activeChart + theme} symbol={activeChart} theme={theme} />
+                  </div>
+                </div>
+              )}
 
             </div>
           </main>
@@ -1065,67 +1036,48 @@ const DeliverySparkline = ({ data, theme }) => {
 };
 
 const TVChart = ({ symbol, theme }) => {
-  const containerId = 'tv_chart_container';
-
   useEffect(() => {
+    const containerId = 'tv_chart_container';
     const container = document.getElementById(containerId);
     if (container) container.innerHTML = '';
 
-    let widget = null;
-
-    const initWidget = () => {
-      if (!window.TradingView) return;
-      widget = new window.TradingView.widget({
-        autosize: true,
-        symbol: symbol,
-        interval: "D",
-        timezone: "Asia/Kolkata",
-        theme: theme,
-        style: "1",
-        locale: "en",
-        enable_publishing: false,
-        hide_top_toolbar: false,
-        hide_legend: false,
-        save_image: false,
-        container_id: containerId,
-      });
-
-      widget.onChartReady(() => {
-        const chart = widget.activeChart();
-        chart.createStudy('Moving Average Exponential', false, false, { length: 20 }, { 'Plot.color': '#f97316', 'Plot.linewidth': 2 });
-        chart.createStudy('Moving Average Exponential', false, false, { length: 50 }, { 'Plot.color': '#3b82f6', 'Plot.linewidth': 2 });
-        chart.createStudy('Moving Average', false, false, { length: 200 }, { 'Plot.color': '#000000', 'Plot.linewidth': 2 });
-      });
+    const loadChart = () => {
+      if (window.TradingView) {
+        new window.TradingView.widget({
+          autosize: true,
+          symbol: symbol,
+          interval: "D",
+          timezone: "Asia/Kolkata",
+          theme: theme,
+          style: "1",
+          locale: "en",
+          enable_publishing: false,
+          hide_top_toolbar: false,
+          hide_legend: false,
+          save_image: false,
+          container_id: containerId,
+          studies: [
+            "MAExp@tv-basicstudies",
+            "MAExp@tv-basicstudies",
+            "MASimple@tv-basicstudies"
+          ]
+        });
+      }
     };
 
     if (typeof window.TradingView === 'undefined') {
-      const existing = document.getElementById('tv-js-script');
-      if (existing) {
-        existing.addEventListener('load', initWidget);
-      } else {
-        const script = document.createElement('script');
-        script.id = 'tv-js-script';
-        script.src = 'https://s3.tradingview.com/tv.js';
-        script.async = true;
-        script.onload = initWidget;
-        document.body.appendChild(script);
-      }
+      const script = document.createElement('script');
+      script.id = 'tv-js-script';
+      script.src = 'https://s3.tradingview.com/tv.js';
+      script.async = true;
+      script.onload = loadChart;
+      document.body.appendChild(script);
     } else {
-      initWidget();
+      loadChart();
     }
+  }, []);
 
-    return () => {
-      if (widget && typeof widget.remove === 'function') {
-        widget.remove();
-      } else {
-        const c = document.getElementById(containerId);
-        if (c) c.innerHTML = '';
-      }
-      widget = null;
-    };
-  }, [symbol, theme]);
-
-  return <div id={containerId} style={{ width: '100%', height: '100%' }} />;
+  return <div id="tv_chart_container" style={{ width: '100%', height: '100%' }} />;
 };
 
 export default App;
