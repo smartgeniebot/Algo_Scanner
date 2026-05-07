@@ -10,3 +10,8 @@ env/
 # Ignore Secrets and Tokens
 access_token.txt
 .env
+
+# Ignore local Playwright runtime folders
+fyers_session/
+watchlists/
+watchlist_snapshots/

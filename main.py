@@ -552,28 +552,108 @@ class WatchlistRequest(BaseModel):
     symbols: List[str]
 
 
+def _ensure_watchlist_jobs_table(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS watchlist_jobs (
+            id         SERIAL PRIMARY KEY,
+            symbols    TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+
+
 @app.post("/api/fyers-watchlist")
 async def fyers_watchlist(request: WatchlistRequest):
-    """
-    Accepts the current scan result symbols and launches fyers_watchlist_sync.py
-    as a detached subprocess that opens a browser for the user to log in and import.
-    """
-    import subprocess
-    import sys
-
+    """Button click: store symbols as a pending job for watchlist_runner.py to pick up."""
     symbols = [s.strip() for s in request.symbols if s.strip()]
     if not symbols:
         return {"status": "error", "message": "No symbols provided"}
-
-    symbols_arg = ",".join(symbols)
-    script = Path(__file__).parent / "fyers_watchlist_sync.py"
-
     try:
-        subprocess.Popen(
-            [sys.executable, str(script), "--symbols", symbols_arg],
-            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+        conn = get_db_connection()
+        _ensure_watchlist_jobs_table(conn)
+        cur = conn.cursor()
+        # Cancel any stale pending jobs first
+        cur.execute("UPDATE watchlist_jobs SET status='cancelled' WHERE status='pending'")
+        cur.execute(
+            "INSERT INTO watchlist_jobs (symbols, status) VALUES (%s, 'pending') RETURNING id",
+            (",".join(symbols),)
         )
-        return {"status": "success", "message": f"Watchlist sync launched for {len(symbols)} symbols"}
+        job_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"status": "success", "job_id": job_id, "count": len(symbols)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/fyers-watchlist-status")
+async def fyers_watchlist_status(job_id: int):
+    """Frontend polls this to know when the local runner has finished."""
+    try:
+        conn = get_db_connection()
+        _ensure_watchlist_jobs_table(conn)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT status FROM watchlist_jobs WHERE id = %s", (job_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return {"status": "error", "message": "Job not found"}
+        return {"status": row["status"]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/fyers-watchlist-job")
+async def fyers_watchlist_job():
+    """watchlist_runner.py calls this to claim a pending job."""
+    try:
+        conn = get_db_connection()
+        _ensure_watchlist_jobs_table(conn)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            UPDATE watchlist_jobs SET status='running', updated_at=NOW()
+            WHERE id = (
+                SELECT id FROM watchlist_jobs WHERE status='pending'
+                ORDER BY created_at DESC LIMIT 1
+            )
+            RETURNING id, symbols
+        """)
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        if not row:
+            return {"status": "none"}
+        return {"status": "ok", "job_id": row["id"], "symbols": row["symbols"].split(",")}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/fyers-watchlist-done")
+async def fyers_watchlist_done(body: dict):
+    """watchlist_runner.py calls this when the sync is complete."""
+    job_id = body.get("job_id")
+    result = body.get("result", "done")   # "done" or "failed"
+    if not job_id:
+        return {"status": "error"}
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE watchlist_jobs SET status=%s, updated_at=NOW() WHERE id=%s",
+            (result, job_id)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"status": "ok"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

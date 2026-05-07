@@ -404,18 +404,44 @@ function App() {
     if (sortedStocks.length === 0) return;
     const symbols = sortedStocks.map(s => s.fyers_symbol).filter(Boolean);
     setFyersWlStatus('loading');
+
+    let jobId = null;
     try {
-      const r = await fetch('http://localhost:8000/api/fyers-watchlist', {
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/fyers-watchlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbols })
       });
       const d = await r.json();
-      setFyersWlStatus(d.status === 'success' ? 'success' : 'error');
+      if (d.status !== 'success') { setFyersWlStatus('error'); return; }
+      jobId = d.job_id;
     } catch {
       setFyersWlStatus('error');
+      return;
     }
-    setTimeout(() => setFyersWlStatus('idle'), 4000);
+
+    // Poll for completion (runner picks it up locally, marks done on Render)
+    const deadline = Date.now() + 20 * 60 * 1000; // 20 min max
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/fyers-watchlist-status?job_id=${jobId}`);
+        const d = await r.json();
+        if (d.status === 'done') {
+          clearInterval(poll);
+          setFyersWlStatus('success');
+          setTimeout(() => setFyersWlStatus('idle'), 5000);
+        } else if (d.status === 'failed' || d.status === 'cancelled') {
+          clearInterval(poll);
+          setFyersWlStatus('error');
+          setTimeout(() => setFyersWlStatus('idle'), 5000);
+        } else if (Date.now() > deadline) {
+          clearInterval(poll);
+          setFyersWlStatus('error');
+        }
+      } catch {
+        // keep polling on network blip
+      }
+    }, 4000);
   };
 
   const formatDT = (dt) => {
@@ -612,9 +638,9 @@ function App() {
                       }}
                     >
                       {fyersWlStatus === 'idle'    && 'Fyers Watchlist Import'}
-                      {fyersWlStatus === 'loading' && 'Opening...'}
-                      {fyersWlStatus === 'success' && 'Browser Launched!'}
-                      {fyersWlStatus === 'error'   && 'Failed — run main.py locally first'}
+                      {fyersWlStatus === 'loading' && 'Waiting for runner...'}
+                      {fyersWlStatus === 'success' && 'Imported!'}
+                      {fyersWlStatus === 'error'   && 'Failed — run watchlist_runner.py first'}
                     </button>
                     <span style={{ fontSize: '10px', color: t.textMuted, fontStyle: 'italic' }}>Contact admin to run this feature</span>
                   </div>
