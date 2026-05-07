@@ -3,7 +3,11 @@
     "allow": [
       "WebFetch(domain:api-connect-docs.fyers.in)",
       "WebFetch(domain:fyers.in)",
-      "WebFetch(domain:community.fyers.in)"
+      "WebFetch(domain:community.fyers.in)",
+      "Bash(copy \"c:\\\\Users\\\\merly\\\\Desktop\\\\Algo_Scanner\\\\Run Watchlist Importer.bat\" \"c:\\\\Users\\\\merly\\\\Desktop\\\\Run Watchlist Importer.bat\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\merly\\Desktop"
     ]
   }
 }
