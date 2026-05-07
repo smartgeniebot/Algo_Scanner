@@ -716,24 +716,53 @@ function App() {
                 </div>
               </div>
 
-              {activeChart && (
-                <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
-                  <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
-                    <div style={{ fontWeight: '800', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                      📊 {activeChart.replace('BSE:', '')}
+              {activeChart && (() => {
+                const activeIdx = sortedStocks.findIndex(s => {
+                  const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
+                  return `BSE:${cleanTicker}` === activeChart;
+                });
+                const navTo = (idx) => {
+                  const s = sortedStocks[idx];
+                  if (!s) return;
+                  const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
+                  if (cleanTicker) setActiveChart(`BSE:${cleanTicker}`);
+                };
+                return (
+                  <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
+                    <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            onClick={() => navTo(activeIdx - 1)}
+                            disabled={activeIdx <= 0}
+                            title="Previous stock"
+                            style={{ padding: '3px 8px', borderRadius: '4px', border: `1px solid ${t.border}`, backgroundColor: t.bgPanel, color: activeIdx <= 0 ? t.textMuted : t.textMain, cursor: activeIdx <= 0 ? 'not-allowed' : 'pointer', fontSize: '14px', lineHeight: 1 }}
+                          >▲</button>
+                          <button
+                            onClick={() => navTo(activeIdx + 1)}
+                            disabled={activeIdx >= sortedStocks.length - 1}
+                            title="Next stock"
+                            style={{ padding: '3px 8px', borderRadius: '4px', border: `1px solid ${t.border}`, backgroundColor: t.bgPanel, color: activeIdx >= sortedStocks.length - 1 ? t.textMuted : t.textMain, cursor: activeIdx >= sortedStocks.length - 1 ? 'not-allowed' : 'pointer', fontSize: '14px', lineHeight: 1 }}
+                          >▼</button>
+                        </div>
+                        <div style={{ fontWeight: '800', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                          📊 {activeChart.replace('BSE:', '')}
+                          {sortedStocks.length > 0 && <span style={{ fontSize: '11px', color: t.textMuted, fontWeight: '600' }}>{activeIdx + 1} / {sortedStocks.length}</span>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setActiveChart(null)}
+                        style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                      >
+                        Close Split View ✖
+                      </button>
                     </div>
-                    <button 
-                      onClick={() => setActiveChart(null)} 
-                      style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
-                    >
-                      Close Split View ✖
-                    </button>
+                    <div style={{ flex: 1, position: 'relative' }}>
+                      <TVChart key={activeChart + theme} symbol={activeChart} theme={theme} />
+                    </div>
                   </div>
-                  <div style={{ flex: 1, position: 'relative' }}>
-                    <TVChart key={activeChart + theme} symbol={activeChart} theme={theme} />
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
             </div>
           </main>
@@ -1057,9 +1086,9 @@ const TVChart = ({ symbol, theme }) => {
           save_image: false,
           container_id: containerId,
           studies: [
-            { id: "MAExp@tv-basicstudies", inputs: { length: 20 } },
-            { id: "MAExp@tv-basicstudies", inputs: { length: 50 } },
-            { id: "MASimple@tv-basicstudies", inputs: { length: 200 } }
+            { id: "MAExp@tv-basicstudies", inputs: { length: 20 }, overrides: { "Plot.color": "#f97316", "Plot.linewidth": 2 } },
+            { id: "MAExp@tv-basicstudies", inputs: { length: 50 }, overrides: { "Plot.color": "#3b82f6", "Plot.linewidth": 2 } },
+            { id: "MASimple@tv-basicstudies", inputs: { length: 200 }, overrides: { "Plot.color": "#000000", "Plot.linewidth": 2 } }
           ]
         });
       }
