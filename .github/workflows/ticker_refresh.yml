@@ -1,6 +1,10 @@
 name: NSE Ticker Refresh
 
 on:
+  schedule:
+    # Runs on the 1st of every month at 00:30 UTC (06:00 AM IST)
+    # Clear of all other jobs: market_engine (01:00 AM IST), bhavcopy_engine (04:00 AM IST)
+    - cron: '30 0 1 * *'
   workflow_dispatch:
 
 jobs:
