@@ -21,6 +21,11 @@ function App() {
 
   const [fyersWlStatus, setFyersWlStatus] = useState('idle');
 
+  const [weeklyEmaFilter, setWeeklyEmaFilter] = useState(() => {
+    const stored = localStorage.getItem('weeklyEmaFilter');
+    return stored === null ? true : stored === 'true';
+  });
+
   const [triggerStatus, setTriggerStatus] = useState('idle');
   const [triggerLog, setTriggerLog] = useState([]);
   const [intradayStatus, setIntradayStatus] = useState('idle');
@@ -59,7 +64,7 @@ function App() {
     const stocksReq = fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ industries: [], basic_industries: [...micros], fundamentals })
+      body: JSON.stringify({ industries: [], basic_industries: [...micros], fundamentals, weekly_ema_filter: weeklyEmaFilter })
     }).then(r => r.json());
 
     // fire stocks + delivery in parallel — delivery uses all currently active symbols from DB
@@ -108,7 +113,7 @@ function App() {
     }
 
     const stocksReq = fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, weekly_ema_filter: weeklyEmaFilter })
     }).then(r => r.json());
 
     const deliveryReq = fetch('https://algo-scanner-lnck.onrender.com/api/delivery-bulk', {
@@ -751,6 +756,30 @@ function App() {
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, padding: '40px' }}>
           <div style={{ maxWidth: '600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '800', color: t.textMain }}>Settings</h2>
+
+            {/* Scanner Filters */}
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain }}>Scanner Filters</div>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', cursor: 'pointer' }}>
+                <div style={{ position: 'relative', flexShrink: 0, marginTop: '2px' }}>
+                  <input
+                    type="checkbox"
+                    checked={weeklyEmaFilter}
+                    onChange={e => {
+                      setWeeklyEmaFilter(e.target.checked);
+                      localStorage.setItem('weeklyEmaFilter', e.target.checked);
+                    }}
+                    style={{ width: '18px', height: '18px', accentColor: t.btnPrimaryBg, cursor: 'pointer' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ fontWeight: '700', fontSize: '14px', color: t.textMain, marginBottom: '3px' }}>Weekly EMA Filter (20 &gt; 50)</div>
+                  <div style={{ fontSize: '12px', color: t.textMuted, lineHeight: '1.5' }}>
+                    When enabled, the Scanner only shows stocks where <strong>Weekly EMA20 &gt; EMA50</strong> — confirming a weekly uptrend. Daily crossover and intraday pulse also respect this condition. Enabled by default.
+                  </div>
+                </div>
+              </label>
+            </div>
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>

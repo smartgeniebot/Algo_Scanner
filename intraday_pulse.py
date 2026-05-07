@@ -57,6 +57,7 @@ def run_hourly_pulse():
         SELECT id, fyers_symbol, daily_cross_date, first_1h_cross_time, first_15m_cross_time
         FROM stocks
         WHERE daily_cross_active = 'Yes'
+          AND (weekly_ema_bullish = TRUE OR weekly_ema_bullish IS NULL)
     """)
     active_stocks = cursor.fetchall()
 

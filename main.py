@@ -30,6 +30,7 @@ class IndustryRequest(BaseModel):
     industries: List[str]
     basic_industries: Optional[List[str]] = None
     fundamentals: Optional[List[str]] = None
+    weekly_ema_filter: Optional[bool] = True
 
 def get_db_connection():
     # Connecting to Neon Cloud
@@ -90,6 +91,10 @@ async def get_stocks(request: IndustryRequest):
 
     query_conditions = ["daily_cross_active = 'Yes'"]
     query_params = []
+
+    # Weekly EMA filter: only stocks where weekly EMA20 > EMA50
+    if request.weekly_ema_filter:
+        query_conditions.append("weekly_ema_bullish = TRUE")
 
     # 1. Micro industry filter (basic_industry) takes priority over macro
     if request.basic_industries:

@@ -165,6 +165,12 @@ def run_daily_scan():
 
     n_df = pd.DataFrame(n_res.get('candles', []), columns=['date','open','high','low','close','vol'])
 
+    # Ensure weekly_ema_bullish column exists
+    cursor.execute("""
+        ALTER TABLE stocks ADD COLUMN IF NOT EXISTS weekly_ema_bullish BOOLEAN DEFAULT FALSE
+    """)
+    conn.commit()
+
     cursor.execute("SELECT id, fyers_symbol, daily_cross_active, daily_cross_date, first_1h_cross_time, first_15m_cross_time FROM stocks")
     stocks = cursor.fetchall()
 
@@ -223,13 +229,24 @@ def run_daily_scan():
             new_date = "--"
             new_1h = None
             new_15m = None
+            new_weekly_bullish = False
+
+            # --- WEEKLY EMA CHECK ---
+            res_w = fetch_safe(fyers, {"symbol": symbol, "resolution": "W", "date_format": "1",
+                                       "range_from": (today_ist - timedelta(days=730)).strftime("%Y-%m-%d"),
+                                       "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
+            if isinstance(res_w, dict) and "candles" in res_w and len(res_w["candles"]) >= 50:
+                dfw = pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol'])
+                dfw['E20'] = ta.ema(dfw['close'], 20)
+                dfw['E50'] = ta.ema(dfw['close'], 50)
+                new_weekly_bullish = bool(dfw['E20'].iloc[-1] > dfw['E50'].iloc[-1])
 
             if len(df) >= 50:
                 df['E20'] = ta.ema(df['close'], 20)
                 df['E50'] = ta.ema(df['close'], 50)
                 df['P20'] = df['E20'].shift(1)
                 df['P50'] = df['E50'].shift(1)
-                
+
                 curr_daily_bullish = df['E20'].iloc[-1] > df['E50'].iloc[-1]
 
                 if curr_daily_bullish:
@@ -282,10 +299,10 @@ def run_daily_scan():
 
             # 🛡️ BULLETPROOF FIX: Commit immediately after updating EACH stock.
             cursor.execute("""
-                UPDATE stocks 
-                SET rs_score=%s, daily_cross_active=%s, daily_cross_date=%s, first_1h_cross_time=%s, first_15m_cross_time=%s 
+                UPDATE stocks
+                SET rs_score=%s, daily_cross_active=%s, daily_cross_date=%s, first_1h_cross_time=%s, first_15m_cross_time=%s, weekly_ema_bullish=%s
                 WHERE id=%s
-            """, (rs_val, new_active, new_date, new_1h, new_15m, stock_id))
+            """, (rs_val, new_active, new_date, new_1h, new_15m, new_weekly_bullish, stock_id))
             
             conn.commit()
 
