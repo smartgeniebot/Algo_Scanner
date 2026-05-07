@@ -231,15 +231,17 @@ def run_daily_scan():
             new_15m = None
             new_weekly_bullish = False
 
-            # --- WEEKLY EMA CHECK ---
-            res_w = fetch_safe(fyers, {"symbol": symbol, "resolution": "W", "date_format": "1",
-                                       "range_from": (today_ist - timedelta(days=730)).strftime("%Y-%m-%d"),
-                                       "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
-            if isinstance(res_w, dict) and "candles" in res_w and len(res_w["candles"]) >= 50:
-                dfw = pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol'])
-                dfw['E20'] = ta.ema(dfw['close'], 20)
-                dfw['E50'] = ta.ema(dfw['close'], 50)
-                new_weekly_bullish = bool(dfw['E20'].iloc[-1] > dfw['E50'].iloc[-1])
+            # --- WEEKLY EMA CHECK (resampled from daily — no extra API call) ---
+            # 364 days daily → ~73 weekly candles, enough warmup for EMA50
+            if len(df) >= 50:
+                df_dt = df.copy()
+                df_dt['dt'] = pd.to_datetime(df_dt['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
+                df_dt = df_dt.set_index('dt')
+                dfw = df_dt['close'].resample('W').last().dropna().reset_index(drop=True)
+                if len(dfw) >= 50:
+                    dfw_e20 = ta.ema(dfw, 20)
+                    dfw_e50 = ta.ema(dfw, 50)
+                    new_weekly_bullish = bool(dfw_e20.iloc[-1] > dfw_e50.iloc[-1])
 
             if len(df) >= 50:
                 df['E20'] = ta.ema(df['close'], 20)
