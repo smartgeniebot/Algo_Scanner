@@ -600,21 +600,24 @@ function App() {
                   <button onClick={handleExportCSV} style={{ padding: '4px 12px', backgroundColor: '#10b981', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>📥 Export CSV</button>
                 )}
                 {sortedStocks.length > 0 && (
-                  <button
-                    onClick={handleFyersWatchlist}
-                    disabled={fyersWlStatus !== 'idle'}
-                    style={{
-                      padding: '4px 12px',
-                      backgroundColor: fyersWlStatus === 'success' ? '#10b981' : fyersWlStatus === 'error' ? '#ef4444' : fyersWlStatus === 'loading' ? '#eab308' : '#6366f1',
-                      color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700',
-                      cursor: fyersWlStatus !== 'idle' ? 'not-allowed' : 'pointer'
-                    }}
-                  >
-                    {fyersWlStatus === 'idle'    && 'Fyers Watchlist'}
-                    {fyersWlStatus === 'loading' && 'Opening...'}
-                    {fyersWlStatus === 'success' && 'Browser Launched!'}
-                    {fyersWlStatus === 'error'   && 'Failed — is local server running?'}
-                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px' }}>
+                    <button
+                      onClick={handleFyersWatchlist}
+                      disabled={fyersWlStatus !== 'idle'}
+                      style={{
+                        padding: '4px 12px',
+                        backgroundColor: fyersWlStatus === 'success' ? '#10b981' : fyersWlStatus === 'error' ? '#ef4444' : fyersWlStatus === 'loading' ? '#eab308' : '#6366f1',
+                        color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700',
+                        cursor: fyersWlStatus !== 'idle' ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {fyersWlStatus === 'idle'    && 'Fyers Watchlist Import'}
+                      {fyersWlStatus === 'loading' && 'Opening...'}
+                      {fyersWlStatus === 'success' && 'Browser Launched!'}
+                      {fyersWlStatus === 'error'   && 'Failed — run main.py locally first'}
+                    </button>
+                    <span style={{ fontSize: '10px', color: t.textMuted, fontStyle: 'italic' }}>Contact admin to run this feature</span>
+                  </div>
                 )}
               </div>
               <input id="results-search" name="results-search" type="text" autoComplete="off" placeholder="🔍 Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '300px', backgroundColor: t.inputBg, color: t.textMain }} />
