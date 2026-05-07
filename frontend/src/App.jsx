@@ -758,7 +758,7 @@ function App() {
                       </button>
                     </div>
                     <div style={{ flex: 1, position: 'relative' }}>
-                      <TVChart key={activeChart + theme} symbol={activeChart} theme={theme} />
+                      <TVChart symbol={activeChart} theme={theme} />
                     </div>
                   </div>
                 );
@@ -1065,48 +1065,68 @@ const DeliverySparkline = ({ data, theme }) => {
 };
 
 const TVChart = ({ symbol, theme }) => {
-  useEffect(() => {
-    const containerId = 'tv_chart_container';
-    const container = document.getElementById(containerId);
-    if (container) container.innerHTML = ''; 
+  const containerId = 'tv_chart_container';
 
-    const loadChart = () => {
-      if (window.TradingView) {
-        new window.TradingView.widget({
-          autosize: true,
-          symbol: symbol,
-          interval: "D",
-          timezone: "Asia/Kolkata",
-          theme: theme,
-          style: "1",
-          locale: "en",
-          enable_publishing: false,
-          hide_top_toolbar: false,
-          hide_legend: false,
-          save_image: false,
-          container_id: containerId,
-          studies: [
-            { id: "MAExp@tv-basicstudies", inputs: { length: 20 }, overrides: { "Plot.color": "#f97316", "Plot.linewidth": 2 } },
-            { id: "MAExp@tv-basicstudies", inputs: { length: 50 }, overrides: { "Plot.color": "#3b82f6", "Plot.linewidth": 2 } },
-            { id: "MASimple@tv-basicstudies", inputs: { length: 200 }, overrides: { "Plot.color": "#000000", "Plot.linewidth": 2 } }
-          ]
-        });
-      }
+  useEffect(() => {
+    const container = document.getElementById(containerId);
+    if (container) container.innerHTML = '';
+
+    const initWidget = () => {
+      if (!window.TradingView) return;
+      new window.TradingView.widget({
+        autosize: true,
+        symbol: symbol,
+        interval: "D",
+        timezone: "Asia/Kolkata",
+        theme: theme,
+        style: "1",
+        locale: "en",
+        enable_publishing: false,
+        hide_top_toolbar: false,
+        hide_legend: false,
+        save_image: false,
+        container_id: containerId,
+        studies: [
+          {
+            id: "MAExp@tv-basicstudies",
+            version: 1,
+            inputs: { length: 20, source: "close" },
+            styles: { plot_0: { linestyle: 0, linewidth: 2, plottype: 0, trackPrice: false, transparency: 0, visible: true, color: "#f97316" } }
+          },
+          {
+            id: "MAExp@tv-basicstudies",
+            version: 1,
+            inputs: { length: 50, source: "close" },
+            styles: { plot_0: { linestyle: 0, linewidth: 2, plottype: 0, trackPrice: false, transparency: 0, visible: true, color: "#3b82f6" } }
+          },
+          {
+            id: "MASimple@tv-basicstudies",
+            version: 1,
+            inputs: { length: 200, source: "close" },
+            styles: { plot_0: { linestyle: 0, linewidth: 2, plottype: 0, trackPrice: false, transparency: 0, visible: true, color: "#000000" } }
+          }
+        ]
+      });
     };
 
     if (typeof window.TradingView === 'undefined') {
-      const script = document.createElement('script');
-      script.id = 'tv-js-script';
-      script.src = 'https://s3.tradingview.com/tv.js';
-      script.async = true;
-      script.onload = loadChart;
-      document.body.appendChild(script);
+      const existing = document.getElementById('tv-js-script');
+      if (existing) {
+        existing.addEventListener('load', initWidget);
+      } else {
+        const script = document.createElement('script');
+        script.id = 'tv-js-script';
+        script.src = 'https://s3.tradingview.com/tv.js';
+        script.async = true;
+        script.onload = initWidget;
+        document.body.appendChild(script);
+      }
     } else {
-      loadChart();
+      initWidget();
     }
-  }, []); 
+  }, [symbol, theme]);
 
-  return <div id="tv_chart_container" style={{ width: '100%', height: '100%' }} />;
+  return <div id={containerId} style={{ width: '100%', height: '100%' }} />;
 };
 
 export default App;
