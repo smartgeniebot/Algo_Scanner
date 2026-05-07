@@ -513,20 +513,26 @@ async def bhavcopy_status():
 
 @app.post("/api/delivery-bulk")
 async def get_delivery_bulk(request: dict):
-    """Returns 14-day delivery % for a list of NSE symbols in one query."""
+    """Returns 14-day delivery % for a list of NSE symbols in one query.
+    If symbols list is empty, returns all stored symbols."""
     symbols = [s.upper() for s in request.get("symbols", []) if s]
-    if not symbols:
-        return {"status": "success", "data": {}}
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        placeholders = ','.join(['%s'] * len(symbols))
-        cursor.execute(f"""
-            SELECT symbol, trade_date, delivery_pct
-            FROM delivery_data
-            WHERE symbol IN ({placeholders})
-            ORDER BY symbol, trade_date ASC
-        """, symbols)
+        if symbols:
+            placeholders = ','.join(['%s'] * len(symbols))
+            cursor.execute(f"""
+                SELECT symbol, trade_date, delivery_pct
+                FROM delivery_data
+                WHERE symbol IN ({placeholders})
+                ORDER BY symbol, trade_date ASC
+            """, symbols)
+        else:
+            cursor.execute("""
+                SELECT symbol, trade_date, delivery_pct
+                FROM delivery_data
+                ORDER BY symbol, trade_date ASC
+            """)
         rows = cursor.fetchall()
         cursor.close()
         conn.close()

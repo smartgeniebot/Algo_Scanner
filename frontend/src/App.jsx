@@ -36,11 +36,7 @@ function App() {
       .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
   }, []);
 
-  useEffect(() => {
-    if (stocks.length === 0) return;
-    const tickers = stocks
-      .map(s => s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : null)
-      .filter(Boolean);
+  const fetchDelivery = (tickers) => {
     const uncached = tickers.filter(t => !(t in deliveryCache));
     if (uncached.length === 0) return;
     fetch('https://algo-scanner-lnck.onrender.com/api/delivery-bulk', {
@@ -49,23 +45,39 @@ function App() {
       body: JSON.stringify({ symbols: uncached })
     })
       .then(r => r.json())
-      .then(d => {
-        if (d.status === 'success') {
-          setDeliveryCache(prev => ({ ...prev, ...d.data }));
-        }
-      })
+      .then(d => { if (d.status === 'success') setDeliveryCache(prev => ({ ...prev, ...d.data })); })
       .catch(() => {});
-  }, [stocks]);
+  };
+
+  const extractTickers = (stockList) =>
+    stockList.map(s => s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : null).filter(Boolean);
 
   const doScan = (micros, fundamentals) => {
     setLoading(true);
-    fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
+    const stocksReq = fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ industries: [], basic_industries: [...micros], fundamentals })
-    }).then(res => res.json())
-      .then(res => { setStocks(res.data || []); setLoading(false); })
+    }).then(r => r.json());
+
+    // fire stocks + delivery in parallel — delivery uses all currently active symbols from DB
+    const deliveryReq = fetch('https://algo-scanner-lnck.onrender.com/api/delivery-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols: [] })  // empty triggers backend to return all stored symbols
+    }).then(r => r.json()).catch(() => ({ status: 'error', data: {} }));
+
+    stocksReq
+      .then(res => {
+        const data = res.data || [];
+        setStocks(data);
+        setLoading(false);
+        // also fetch delivery specifically for this result set in case any are missing
+        fetchDelivery(extractTickers(data));
+      })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+
+    deliveryReq.then(d => { if (d.status === 'success') setDeliveryCache(prev => ({ ...prev, ...d.data })); });
   };
 
   const handleScan = () => {
@@ -78,19 +90,11 @@ function App() {
     setActiveChart(null);
     setLoading(true);
 
+    let body;
     if (level === 'micro') {
-      // itemsToScan are basic_industry (micro) values — select them directly
-      const micros = new Set(itemsToScan);
-      setSelectedMicros(micros);
-      fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ industries: [], basic_industries: itemsToScan, fundamentals: selectedFundamentals })
-      }).then(res => res.json())
-        .then(res => { setStocks(res.data || []); setLoading(false); })
-        .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+      setSelectedMicros(new Set(itemsToScan));
+      body = { industries: [], basic_industries: itemsToScan, fundamentals: selectedFundamentals };
     } else {
-      // itemsToScan are macro industry names — expand to all their micros
       const micros = new Set();
       Object.values(hierarchy).forEach(macros =>
         Object.entries(macros).forEach(([macro, microList]) => {
@@ -98,14 +102,27 @@ function App() {
         })
       );
       setSelectedMicros(micros);
-      fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ industries: itemsToScan, basic_industries: [], fundamentals: selectedFundamentals })
-      }).then(res => res.json())
-        .then(res => { setStocks(res.data || []); setLoading(false); })
-        .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+      body = { industries: itemsToScan, basic_industries: [], fundamentals: selectedFundamentals };
     }
+
+    const stocksReq = fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(r => r.json());
+
+    const deliveryReq = fetch('https://algo-scanner-lnck.onrender.com/api/delivery-bulk', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbols: [] })
+    }).then(r => r.json()).catch(() => ({ status: 'error', data: {} }));
+
+    stocksReq
+      .then(res => {
+        const data = res.data || [];
+        setStocks(data);
+        setLoading(false);
+        fetchDelivery(extractTickers(data));
+      })
+      .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+
+    deliveryReq.then(d => { if (d.status === 'success') setDeliveryCache(prev => ({ ...prev, ...d.data })); });
   };
 
   const handleSelectAll = () => {
