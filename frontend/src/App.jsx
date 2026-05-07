@@ -782,7 +782,7 @@ function App() {
               <div>
                 <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>NSE Stock Universe</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Downloads the full NSE equity list from <strong>EQUITY_L.csv</strong>, fetches sector, industry &amp; basic industry for every stock live from the <strong>NSE quote API</strong>, and syncs everything into the database. Delisted stocks are removed automatically. Run this once a month to keep the stock universe current.
+                  Downloads the full NSE equity list from <strong>EQUITY_L.csv</strong>, fetches sector, industry &amp; basic industry for every stock live from the <strong>NSE quote API</strong>, and syncs everything into the database. Delisted stocks are removed automatically. Runs automatically on the <strong>1st of every month at 6:00 AM IST</strong> — use this to trigger it manually if needed.
                 </div>
               </div>
 
