@@ -10,7 +10,7 @@ from fyers_apiv3 import fyersModel
 # It checks GitHub Secrets first; if not found, it uses your local values.
 FYERS_ID = os.environ.get('FYERS_ID', "DM00713")
 TOTP_KEY = os.environ.get('TOTP_KEY', "7THHDLSTUPJG6BN32PJ5ZS435XPND2X2")
-PIN = os.environ.get('PIN', "1703")
+PIN = os.environ.get('PIN', "0706")
 CLIENT_ID = os.environ.get('CLIENT_ID', "QTKF8KZDM9-100")
 SECRET_KEY = os.environ.get('SECRET_KEY', "TTFIR7F078")
 REDIRECT_URI = "https://127.0.0.1"
