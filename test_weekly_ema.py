@@ -19,6 +19,11 @@ TEST_SYMBOLS = [
     "NSE:INFY-EQ",
     "NSE:TATAMOTORS-EQ",
     "NSE:SBIN-EQ",
+    "NSE:TCS-EQ",
+    "NSE:ICICIBANK-EQ",
+    "NSE:WIPRO-EQ",
+    "NSE:AXISBANK-EQ",
+    "NSE:BAJFINANCE-EQ",
 ]
 
 def get_fyers():
@@ -49,7 +54,7 @@ def weekly_from_resample(daily_candles):
     return round(float(e20.iloc[-1]), 4), round(float(e50.iloc[-1]), 4), len(dfw)
 
 def weekly_from_api(fyers, symbol):
-    res = fetch(fyers, symbol, "W", 730)
+    res = fetch(fyers, symbol, "1W", 365)
     if not isinstance(res, dict) or "candles" not in res:
         return None, None, 0
     df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
