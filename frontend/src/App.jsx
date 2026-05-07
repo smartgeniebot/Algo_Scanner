@@ -1057,9 +1057,9 @@ const TVChart = ({ symbol, theme }) => {
           save_image: false,
           container_id: containerId,
           studies: [
-            "MAExp@tv-basicstudies",
-            "MAExp@tv-basicstudies",
-            "MASimple@tv-basicstudies"
+            { id: "MAExp@tv-basicstudies", inputs: { length: 20 } },
+            { id: "MAExp@tv-basicstudies", inputs: { length: 50 } },
+            { id: "MASimple@tv-basicstudies", inputs: { length: 200 } }
           ]
         });
       }
