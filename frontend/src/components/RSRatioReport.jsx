@@ -38,10 +38,12 @@ function classifyTrend(normed) {
   const last  = vals[vals.length - 1];
   const pos   = (last - min) / range;
 
-  const slope = linRegSlope(vals.slice(-ROC_PERIOD));
-
+  // Position in range takes full priority — slope only breaks ties in the middle
   if (pos >= 0.90) return 'HIGH';
   if (pos <= 0.10) return 'LOW';
+
+  // Middle 80% of range: use 10-day slope direction
+  const slope = linRegSlope(vals.slice(-ROC_PERIOD));
   return slope > 0 ? 'RISING' : 'FALLING';
 }
 

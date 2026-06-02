@@ -278,27 +278,31 @@ async def get_sector_rs_history(group_type: str = "sector", days: int = 63):
         conn.close()
         return {}
 
+    # Use 100 calendar days to guarantee at least 63 trading days returned.
+    # Then in Python we keep only the last `days` rows per group so the
+    # frontend always gets exactly 63 trading-day points regardless of holidays.
     cursor.execute("""
         SELECT group_name, trade_date, rs_ratio, stock_count
         FROM sector_rs_history
         WHERE group_type = %s
-          AND trade_date >= CURRENT_DATE - %s
+          AND trade_date >= CURRENT_DATE - INTERVAL '100 days'
         ORDER BY group_name, trade_date ASC
-    """, (group_type, days))
+    """, (group_type,))
 
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
 
-    result = {}
+    # Group rows, then trim each to the last `days` trading-day points
+    raw: dict = {}
     for row in rows:
         name = row["group_name"]
-        result.setdefault(name, []).append({
+        raw.setdefault(name, []).append({
             "trade_date":  str(row["trade_date"]),
             "rs_ratio":    float(row["rs_ratio"]),
             "stock_count": int(row["stock_count"]),
         })
-    return result
+    return {name: pts[-days:] for name, pts in raw.items()}
 
 
 @app.post("/api/refresh-nse-tickers")
