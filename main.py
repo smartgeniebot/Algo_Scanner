@@ -548,69 +548,6 @@ async def intraday_status():
     return _get_workflow_status("intraday_engine.yml")
 
 
-@app.post("/api/trigger-bhavcopy")
-async def trigger_bhavcopy():
-    token = os.environ.get("GITHUB_TOKEN")
-    repo  = os.environ.get("GITHUB_REPO")
-
-    if not token or not repo:
-        return {"status": "error", "message": "Server missing GitHub credentials"}
-
-    _clear_job("bhavcopy")
-
-    response = requests.post(
-        f"https://api.github.com/repos/{repo}/actions/workflows/bhavcopy_engine.yml/dispatches",
-        headers=_gh_headers(), json={"ref": "main"}
-    )
-    if response.status_code == 204:
-        return {"status": "success", "message": "Bhavcopy fetch initiated successfully"}
-    return {"status": "error", "message": f"GitHub Error: {response.text}"}
-
-
-@app.get("/api/bhavcopy-progress")
-async def bhavcopy_progress(since_id: int = 0):
-    return _get_progress("bhavcopy", since_id)
-
-
-@app.get("/api/bhavcopy-status")
-async def bhavcopy_status():
-    return _get_workflow_status("bhavcopy_engine.yml")
-
-
-@app.post("/api/delivery-bulk")
-async def get_delivery_bulk(request: dict):
-    """Returns 14-day delivery % for a list of NSE symbols in one query.
-    If symbols list is empty, returns all stored symbols."""
-    symbols = [s.upper() for s in request.get("symbols", []) if s]
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        if symbols:
-            placeholders = ','.join(['%s'] * len(symbols))
-            cursor.execute(f"""
-                SELECT symbol, trade_date, delivery_pct
-                FROM delivery_data
-                WHERE symbol IN ({placeholders})
-                ORDER BY symbol, trade_date ASC
-            """, symbols)
-        else:
-            cursor.execute("""
-                SELECT symbol, trade_date, delivery_pct
-                FROM delivery_data
-                ORDER BY symbol, trade_date ASC
-            """)
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        result = {}
-        for r in rows:
-            sym = r["symbol"]
-            if sym not in result:
-                result[sym] = []
-            result[sym].append({"date": str(r["trade_date"]), "pct": float(r["delivery_pct"])})
-        return {"status": "success", "data": result}
-    except Exception as e:
-        return {"status": "error", "data": {}, "message": str(e)}
 
 
 class WatchlistRequest(BaseModel):
