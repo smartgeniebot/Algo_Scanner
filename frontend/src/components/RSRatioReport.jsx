@@ -346,8 +346,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
               <code style={{ display: 'block', fontSize: 12, lineHeight: 2, color: isDark ? '#7dd3fc' : '#1e40af', fontFamily: 'monospace' }}>
                 RS          = sector_avg_close / Nifty500_close  (stored daily)<br />
                 RS Ratio    = 100 + (RS - SMA14(RS)) / StdDev14(RS)<br />
-                ROC         = (RS_Ratio[t] - RS_Ratio[t-10]) / RS_Ratio[t-10] x 100<br />
-                RS Momentum = 100 + (ROC - SMA14(ROC)) / StdDev14(ROC)<br />
+                RS Momentum = 100 + (ROC10 - SMA14(ROC10)) / StdDev14(ROC10)  where ROC10 = 10-period rate of change of RS Ratio<br />
                 % from High = (RS_Ratio_today - max_RS_Ratio_63d) / max_RS_Ratio_63d x 100
               </code>
               <div style={{ marginTop: 10, padding: '8px 12px', backgroundColor: isDark ? 'rgba(22,163,74,0.1)' : '#f0fdf4', borderRadius: 6, border: `1px solid ${isDark ? 'rgba(22,163,74,0.3)' : '#bbf7d0'}`, fontSize: 12, color: isDark ? '#4ade80' : '#15803d', fontWeight: 600 }}>
@@ -380,14 +379,6 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                   means: 'Shows which direction the RS Ratio is trending over the last 10 trading days and how fast. This is a supplementary indicator — the quadrant already captures direction via RS Momentum, but 10D Dir shows the raw speed of the move.',
                   lookfor: '▲ Rising = RS Ratio moving up vs Nifty. ▼ Falling = moving down. Use to confirm quadrant transitions.',
                   example: '▲ Rising (0.03%/d) = slow upward drift · ▲ Rising (0.15%/d) = strong upward momentum',
-                },
-                {
-                  col: 'ROC OF RATIO',
-                  color: '#f59e0b',
-                  formula: '(RS_Ratio[t] - RS_Ratio[t-10]) / RS_Ratio[t-10] × 100',
-                  means: 'Raw 10-day rate of change of the RS Ratio. This is the input that feeds into RS Momentum. Positive = RS Ratio higher than 10 days ago. Negative = lower. RS Momentum then Z-scores this ROC against its own 14-day history to normalise it.',
-                  lookfor: 'Positive ROC = relative strength gaining. Negative = losing. Watch for ROC turning positive after a period of negatives — early signal of LAGGING → IMPROVING rotation.',
-                  example: '+3.60% = RS Ratio is 3.6% higher than 10 days ago · -1.27% = 1.27% lower than 10 days ago',
                 },
                 {
                   col: 'RS MOMENTUM',
@@ -505,7 +496,6 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
               <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap', textAlign: 'center' }}>RS Ratio ({DAYS}D)</th>
               <TH label="RS Ratio"      k="rsRatioCurrent" align="center" />
               <TH label="10D Dir"       k="roc"            align="center" />
-              <TH label="ROC of Ratio"  k="roc"            align="center" />
               <TH label="RS Momentum"   k="rsMomentum"     align="center" />
               <TH label="Quadrant"      k="quadrant"       align="center" />
               <TH label="% from High"   k="pctFromHigh"    align="center" />
@@ -514,17 +504,15 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
           </thead>
           <tbody>
             {histLoading ? (
-              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
+              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
             ) : displayed.length === 0 ? (
-              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
+              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
             ) : displayed.map((row, idx) => {
               const m = row._metrics;
               const isLast = idx === displayed.length - 1;
 
               const rsRatioStr  = m ? m.rsRatioCurrent.toFixed(2) : '—';
               const rsRatioClr  = !m ? t.muted : m.rsRatioCurrent >= 100 ? '#16a34a' : '#dc2626';
-              const rocStr      = m ? `${m.roc >= 0 ? '+' : ''}${m.roc.toFixed(2)}%` : '—';
-              const rocClr      = !m ? t.muted : m.roc >= 0 ? '#16a34a' : '#dc2626';
               const pctStr      = m ? (m.pctFromHigh === 0 ? '—' : `${m.pctFromHigh.toFixed(1)}%`) : '—';
               const pctClr      = !m ? t.muted : m.pctFromHigh >= -2 ? t.text : '#dc2626';
 
@@ -550,10 +538,6 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
 
                   <td style={{ padding: '11px 14px', textAlign: 'center' }}>
                     {m ? <DirCell slopeRising={m.slopeRising} pctPerDay={m.pctPerDay} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
-                  </td>
-
-                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-                    <span style={{ fontSize: 13, fontWeight: 800, color: rocClr }}>{rocStr}</span>
                   </td>
 
                   <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}
