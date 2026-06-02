@@ -117,7 +117,7 @@ def run_first_daily_base_scan():
     """)
     cursor.execute("DELETE FROM job_progress WHERE job = 'first_daily_base'")
 
-    # Create/migrate table — add second_base_date if upgrading from old schema
+    # Create table if it doesn't exist yet
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS first_daily_base (
             id               SERIAL PRIMARY KEY,
@@ -132,16 +132,14 @@ def run_first_daily_base_scan():
             updated_at       TIMESTAMPTZ DEFAULT NOW()
         )
     """)
-    cursor.execute("""
-        ALTER TABLE first_daily_base
-        ADD COLUMN IF NOT EXISTS second_base_date TEXT
-    """)
-    # Remove old columns if they exist from previous schema
+    conn.commit()
+
+    # Migrate old schema: add new columns, drop old ones
+    for col in ('first_base_date', 'second_base_date'):
+        cursor.execute(f"ALTER TABLE first_daily_base ADD COLUMN IF NOT EXISTS {col} TEXT")
+    conn.commit()
     for col in ('step1_date', 'step2_date', 'signal_date'):
-        try:
-            cursor.execute(f"ALTER TABLE first_daily_base DROP COLUMN IF EXISTS {col}")
-        except Exception:
-            conn.rollback()
+        cursor.execute(f"ALTER TABLE first_daily_base DROP COLUMN IF EXISTS {col}")
     conn.commit()
 
     log_progress(cursor, conn, "🚀 1st Daily Base Scan Started")
