@@ -660,6 +660,70 @@ async def fyers_watchlist_done(body: dict):
         return {"status": "error", "message": str(e)}
 
 
+@app.get("/api/first-daily-base")
+async def get_first_daily_base():
+    """
+    Returns all stocks in the first_daily_base table.
+    The scan script already filters to signal_date within last 14 days.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'first_daily_base'
+            )
+        """)
+        if not cursor.fetchone()["exists"]:
+            cursor.close()
+            conn.close()
+            return {"status": "success", "data": []}
+
+        cursor.execute("""
+            SELECT fyers_symbol, stock_name, sector, industry, basic_industry,
+                   rs_score, step1_date, step2_date, signal_date
+            FROM first_daily_base
+            ORDER BY signal_date DESC, rs_score DESC NULLS LAST
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "data": [dict(r) for r in rows]}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": []}
+
+
+@app.post("/api/trigger-first-daily-base")
+async def trigger_first_daily_base():
+    token = os.environ.get("GITHUB_TOKEN")
+    repo  = os.environ.get("GITHUB_REPO")
+
+    if not token or not repo:
+        return {"status": "error", "message": "Server missing GitHub credentials"}
+
+    _clear_job("first_daily_base")
+
+    response = requests.post(
+        f"https://api.github.com/repos/{repo}/actions/workflows/first_daily_base_engine.yml/dispatches",
+        headers=_gh_headers(), json={"ref": "main"}
+    )
+    if response.status_code == 204:
+        return {"status": "success", "message": "1st Daily Base scan initiated"}
+    return {"status": "error", "message": f"GitHub Error: {response.text}"}
+
+
+@app.get("/api/first-daily-base-progress")
+async def first_daily_base_progress(since_id: int = 0):
+    return _get_progress("first_daily_base", since_id)
+
+
+@app.get("/api/first-daily-base-status")
+async def first_daily_base_status():
+    return _get_workflow_status("first_daily_base_engine.yml")
+
+
 if __name__ == "__main__":
     import uvicorn
     import os

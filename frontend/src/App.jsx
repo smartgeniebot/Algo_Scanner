@@ -33,12 +33,29 @@ function App() {
   const [intradayLog, setIntradayLog] = useState([]);
   const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle');
   const [refreshLog, setRefreshLog] = useState([]);
+
+  const [firstDailyBase, setFirstDailyBase] = useState([]);
+  const [fdbLoading, setFdbLoading] = useState(false);
+  const [fdbSearch, setFdbSearch] = useState('');
+  const [fdbSort, setFdbSort] = useState({ key: 'signal_date', direction: 'desc' });
+
+  const [fdbTriggerStatus, setFdbTriggerStatus] = useState('idle');
+  const [fdbTriggerLog, setFdbTriggerLog] = useState([]);
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
       .then(res => res.json())
       .then(res => setHierarchy(res.data || {}))
       .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
   }, []);
+
+  useEffect(() => {
+    if (activeView !== 'firstdailybase') return;
+    setFdbLoading(true);
+    fetch('https://algo-scanner-lnck.onrender.com/api/first-daily-base')
+      .then(r => r.json())
+      .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
+      .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
+  }, [activeView]);
 
   const doScan = (micros, fundamentals) => {
     setLoading(true);
@@ -269,6 +286,59 @@ function App() {
   };
 
 
+  const handleTriggerFirstDailyBase = async () => {
+    setFdbTriggerStatus('loading');
+    setFdbTriggerLog([]);
+    const log = (msg) => setFdbTriggerLog(prev => [...prev, msg]);
+
+    log('🏛️ Triggering 1st Daily Base Scan via GitHub Actions...');
+    try {
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-first-daily-base', { method: 'POST' });
+      const d = await r.json();
+      if (d.status !== 'success') { log(`❌ ${d.message}`); setFdbTriggerStatus('error'); return; }
+    } catch (e) { log(`❌ Network error: ${e.message}`); setFdbTriggerStatus('error'); return; }
+
+    log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
+    let lastId = 0;
+
+    const progressInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base-progress?since_id=${lastId}`);
+        const d = await r.json();
+        if (d.lines && d.lines.length > 0) {
+          d.lines.forEach(({ id, line }) => { log(line); lastId = id; });
+        }
+      } catch (_) {}
+    }, 3000);
+
+    await new Promise((resolve, reject) => {
+      const ghInterval = setInterval(async () => {
+        try {
+          const r = await fetch('https://algo-scanner-lnck.onrender.com/api/first-daily-base-status');
+          const d = await r.json();
+          if (d.status === 'completed') {
+            clearInterval(ghInterval);
+            setTimeout(async () => {
+              try {
+                const r2 = await fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base-progress?since_id=${lastId}`);
+                const d2 = await r2.json();
+                if (d2.lines && d2.lines.length > 0) d2.lines.forEach(({ line }) => log(line));
+              } catch (_) {}
+              clearInterval(progressInterval);
+              d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+            }, 4000);
+          }
+        } catch (_) {}
+      }, 15000);
+    }).then(() => {
+      setFdbTriggerStatus('success');
+    }).catch((e) => {
+      log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      clearInterval(progressInterval);
+      setFdbTriggerStatus('error');
+    });
+  };
+
   const handleExportCSV = () => {
     if (sortedStocks.length === 0) return;
 
@@ -434,6 +504,7 @@ function App() {
             <button onClick={() => setActiveView('micro')} style={{...tabStyle, backgroundColor: activeView === 'micro' ? t.bgPanel : 'transparent', color: activeView === 'micro' ? t.textMain : t.textMuted}}>🔬 Micro Industries</button>
             <button onClick={() => setActiveView('directory')} style={{...tabStyle, backgroundColor: activeView === 'directory' ? t.bgPanel : 'transparent', color: activeView === 'directory' ? t.textMain : t.textMuted}}>📋 Stocks Directory</button>
             <button onClick={() => setActiveView('rsratio')} style={{...tabStyle, backgroundColor: activeView === 'rsratio' ? t.bgPanel : 'transparent', color: activeView === 'rsratio' ? t.textMain : t.textMuted}}>📐 RS Ratio</button>
+            <button onClick={() => setActiveView('firstdailybase')} style={{...tabStyle, backgroundColor: activeView === 'firstdailybase' ? t.bgPanel : 'transparent', color: activeView === 'firstdailybase' ? t.textMain : t.textMuted}}>🏛️ 1st Daily Base</button>
             <button onClick={() => setActiveView('settings')} style={{...tabStyle, backgroundColor: activeView === 'settings' ? t.bgPanel : 'transparent', color: activeView === 'settings' ? t.textMain : t.textMuted}}>⚙️ Settings</button>
           </div>
         </div>
@@ -651,6 +722,21 @@ function App() {
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
           <RSRatioReport theme={theme} onScanNavigate={triggerScanFromHeatmap} />
         </div>
+      ) : activeView === 'firstdailybase' ? (
+        <FirstDailyBaseView
+          t={t} theme={theme}
+          stocks={firstDailyBase} loading={fdbLoading}
+          search={fdbSearch} setSearch={setFdbSearch}
+          sort={fdbSort} setSort={setFdbSort}
+          formatDT={formatDT}
+          onRefresh={() => {
+            setFdbLoading(true);
+            fetch('https://algo-scanner-lnck.onrender.com/api/first-daily-base')
+              .then(r => r.json())
+              .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
+              .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
+          }}
+        />
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, padding: '40px' }}>
           <div style={{ maxWidth: '600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -774,6 +860,52 @@ function App() {
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>1st Daily Base Scan</div>
+                <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
+                  Triggers the <strong>first_daily_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 3-step sequence: <strong>EMA50 crosses above SMA200</strong> → <strong>EMA20 crosses below EMA50</strong> → <strong>EMA9 crosses above EMA20</strong>. Only stocks where the final signal occurred within the <strong>last 14 days</strong> are shown in the 1st Daily Base tab. Runs automatically at 01:30 AM IST daily — use this to trigger it manually.
+                </div>
+              </div>
+              <button
+                onClick={handleTriggerFirstDailyBase}
+                disabled={fdbTriggerStatus !== 'idle'}
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: fdbTriggerStatus === 'idle' ? 'pointer' : 'not-allowed',
+                  transition: 'all 0.2s',
+                  backgroundColor:
+                    fdbTriggerStatus === 'loading' ? '#eab308' :
+                    fdbTriggerStatus === 'success' ? '#10b981' :
+                    fdbTriggerStatus === 'error'   ? '#ef4444' :
+                    t.btnPrimaryBg,
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                {fdbTriggerStatus === 'idle'    && '🏛️ Run 1st Daily Base Scan'}
+                {fdbTriggerStatus === 'loading' && '⏳ Starting...'}
+                {fdbTriggerStatus === 'success' && '✅ Triggered!'}
+                {fdbTriggerStatus === 'error'   && '❌ Failed — Retry'}
+              </button>
+
+              {fdbTriggerLog.length > 0 && (
+                <div style={{ backgroundColor: theme === 'dark' ? '#020617' : '#0f172a', borderRadius: '8px', padding: '14px 16px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.8', maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {fdbTriggerLog.map((line, i) => (
+                    <div key={i} style={{ color: line.startsWith('❌') ? '#f87171' : line.startsWith('✅') || line.startsWith('🎉') ? '#4ade80' : line.startsWith('🎯') || line.startsWith('📊') || line.startsWith('🏛️') ? '#60a5fa' : line.startsWith('  ↳') ? '#94a3b8' : line.startsWith('⚠️') ? '#fbbf24' : '#e2e8f0' }}>{line}</div>
+                  ))}
+                  {fdbTriggerStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
+                </div>
+              )}
+            </div>
+
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
                 <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>NSE Stock Universe</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
                   Downloads the full NSE equity list from <strong>EQUITY_L.csv</strong>, fetches sector, industry &amp; basic industry for every stock live from the <strong>NSE quote API</strong>, and syncs everything into the database. Delisted stocks are removed automatically. Runs automatically on the <strong>1st of every month at 6:00 AM IST</strong> — use this to trigger it manually if needed.
@@ -842,6 +974,118 @@ function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function FirstDailyBaseView({ t, theme, stocks, loading, search, setSearch, sort, setSort, formatDT, onRefresh }) {
+  const fdbGridStyle = {
+    display: 'grid',
+    gridTemplateColumns: '1.2fr 0.8fr 0.8fr 0.8fr 0.8fr 1.8fr',
+    width: '100%',
+    alignItems: 'center',
+    textAlign: 'center',
+  };
+
+  const toggleSort = (key) => setSort({ key, direction: sort.key === key && sort.direction === 'desc' ? 'asc' : 'desc' });
+
+  const filtered = useMemo(() => {
+    const s = search.toLowerCase();
+    return s ? stocks.filter(r => Object.values(r).some(v => String(v || '').toLowerCase().includes(s))) : stocks;
+  }, [stocks, search]);
+
+  const sorted = useMemo(() => {
+    const items = [...filtered];
+    if (!sort.key) return items;
+    items.sort((a, b) => {
+      let va = a[sort.key], vb = b[sort.key];
+      const dateKeys = ['step1_date', 'step2_date', 'signal_date'];
+      if (dateKeys.includes(sort.key)) {
+        va = va ? new Date(va).getTime() : (sort.direction === 'asc' ? Infinity : -Infinity);
+        vb = vb ? new Date(vb).getTime() : (sort.direction === 'asc' ? Infinity : -Infinity);
+      } else {
+        va = va ?? (sort.direction === 'asc' ? Infinity : -Infinity);
+        vb = vb ?? (sort.direction === 'asc' ? Infinity : -Infinity);
+      }
+      if (va < vb) return sort.direction === 'asc' ? -1 : 1;
+      if (va > vb) return sort.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return items;
+  }, [filtered, sort]);
+
+  const hdrStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: t.bgApp }}>
+      <div style={{ backgroundColor: t.bgPanel, margin: '15px', borderRadius: '10px', border: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
+
+        {/* Header bar */}
+        <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.border}`, backgroundColor: t.bgApp, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ fontWeight: '700', fontSize: '16px' }}>
+              1st Daily Base &nbsp;<span style={{ fontWeight: '400', fontSize: '13px', color: t.textMuted }}>EMA50 &gt; SMA200 → EMA20 &lt; EMA50 → EMA9 &gt; EMA20 (last 14 days)</span>
+            </div>
+            <span style={{ fontWeight: '700', fontSize: '13px', color: t.textMuted }}>({sorted.length})</span>
+            <button
+              onClick={onRefresh}
+              disabled={loading}
+              style={{ padding: '4px 12px', backgroundColor: t.btnPrimaryBg, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
+            >
+              {loading ? '⏳ Loading...' : '🔄 Refresh'}
+            </button>
+          </div>
+          <input
+            type="text" autoComplete="off" placeholder="🔍 Search..."
+            value={search} onChange={e => setSearch(e.target.value)}
+            style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '280px', backgroundColor: t.inputBg, color: t.textMain, fontSize: '13px' }}
+          />
+        </div>
+
+        {/* Table header */}
+        <div style={{ ...fdbGridStyle, padding: '14px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '13px', color: t.textMuted, backgroundColor: t.bgPanel, flexShrink: 0 }}>
+          <div onClick={() => toggleSort('fyers_symbol')} style={hdrStyle}>Ticker ⇅</div>
+          <div onClick={() => toggleSort('rs_score')} style={hdrStyle}>RS Score ⇅</div>
+          <div onClick={() => toggleSort('step1_date')} style={hdrStyle}>Step 1 (EMA50&gt;SMA200) ⇅</div>
+          <div onClick={() => toggleSort('step2_date')} style={hdrStyle}>Step 2 (EMA20&lt;EMA50) ⇅</div>
+          <div onClick={() => toggleSort('signal_date')} style={hdrStyle}>Signal (EMA9&gt;EMA20) ⇅</div>
+          <div onClick={() => toggleSort('industry')} style={hdrStyle}>Industry &amp; Sector ⇅</div>
+        </div>
+
+        {/* Table body */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>Scanning...</div>
+          ) : sorted.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>
+              {stocks.length === 0 ? 'No signals found in the last 14 days. Run the 1st Daily Base scan to populate results.' : 'No results match your search.'}
+            </div>
+          ) : sorted.map((s, idx) => {
+            const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
+            return (
+              <div
+                key={idx}
+                style={{ ...fdbGridStyle, padding: '14px 0', borderBottom: `1px solid ${t.border}`, fontSize: '13px', transition: 'background-color 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                <div style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</div>
+                <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '3px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>
+                  {s.rs_score ?? '--'}
+                </div>
+                <div style={{ color: t.textTicker, fontWeight: '600' }}>{formatDT(s.step1_date)}</div>
+                <div style={{ color: t.textTicker, fontWeight: '600' }}>{formatDT(s.step2_date)}</div>
+                <div style={{ fontWeight: '800', color: '#10b981' }}>{formatDT(s.signal_date)}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
+                  <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>
+                  <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.sector}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
