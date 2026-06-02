@@ -90,7 +90,9 @@ def ensure_table(cursor, conn):
 def do_fetch(backfill):
     """Phase 1 — fetch all stock closes from Fyers and cache to disk."""
     today_ist  = datetime.now(IST).date()
-    cal_days   = 140 if backfill else 10
+    # Always fetch 140 calendar days so we can check full 63-trading-day
+    # coverage for every stock, even on a daily (non-backfill) run.
+    cal_days   = 140
     range_from = (today_ist - timedelta(days=cal_days)).strftime("%Y-%m-%d")
     range_to   = today_ist.strftime("%Y-%m-%d")
 
@@ -169,7 +171,12 @@ def do_write():
     stock_closes = cache["stock_closes"]
     backfill     = cache["backfill"]
 
-    all_dates = sorted(nifty_closes.index)[-LOOKBACK:] if backfill else [nifty_closes.index[-1]]
+    # Full 63-day window is always needed to determine eligible stocks —
+    # even on a daily run we must check which stocks have data across the
+    # whole lookback period so composition stays consistent day to day.
+    all_dates_window = sorted(nifty_closes.index)[-LOOKBACK:]
+    # Dates we actually write rows for: all 63 on backfill, just today otherwise
+    write_dates = all_dates_window if backfill else [all_dates_window[-1]]
 
     print("🔌 Connecting to DB...")
     conn   = psycopg2.connect(NEON_URL)
@@ -179,25 +186,25 @@ def do_write():
     for group_type, group_dict in groups.items():
         batch = []
         for group_name, symbols in group_dict.items():
-            # Only keep stocks that have price data on EVERY date in the window.
-            # This prevents composition jumps when new stocks are added mid-period.
+            # Only keep stocks that have price data on EVERY date in the full
+            # 63-day window. This locks the universe so composition never jumps.
             eligible = [
                 sym for sym in symbols
                 if sym in stock_closes and
-                   all(d in stock_closes[sym].index for d in all_dates)
+                   all(d in stock_closes[sym].index for d in all_dates_window)
             ]
             if not eligible:
-                # Fallback: use stocks present on at least 90% of dates
-                min_dates = int(len(all_dates) * 0.9)
+                # Fallback: stocks present on at least 90% of the window
+                min_dates = int(len(all_dates_window) * 0.9)
                 eligible = [
                     sym for sym in symbols
                     if sym in stock_closes and
-                       sum(1 for d in all_dates if d in stock_closes[sym].index) >= min_dates
+                       sum(1 for d in all_dates_window if d in stock_closes[sym].index) >= min_dates
                 ]
             if not eligible:
                 continue
 
-            for trade_date in all_dates:
+            for trade_date in write_dates:
                 if trade_date not in nifty_closes.index:
                     continue
                 nifty_val = float(nifty_closes[trade_date])
