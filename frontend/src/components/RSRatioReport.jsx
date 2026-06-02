@@ -195,8 +195,8 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
   const [history, setHistory]           = useState({});
   const [histLoading, setHistLoading]   = useState(true);
   const [hasHistory, setHasHistory]     = useState(false);
-  const [sortKey, setSortKey]           = useState('rsRatioCurrent');
-  const [sortDir, setSortDir]           = useState('desc');
+  const [sortKey, setSortKey]           = useState('quadrant');
+  const [sortDir, setSortDir]           = useState('asc');
   const [qFilter, setQFilter]           = useState('ALL');
   const [search, setSearch]             = useState('');
   const [showInfo, setShowInfo]         = useState(false);
@@ -263,14 +263,26 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       const lo = search.toLowerCase();
       rows = rows.filter(r => r._name.toLowerCase().includes(lo));
     }
+    // Quadrant rotation order: LEADING → IMPROVING → WEAKENING → LAGGING
+    // Within each quadrant sort by RS Momentum desc (highest momentum first)
+    const Q_ORDER = { LEADING: 0, IMPROVING: 1, WEAKENING: 2, LAGGING: 3 };
+
     return [...rows].sort((a, b) => {
+      if (sortKey === 'quadrant') {
+        const qa = Q_ORDER[a._metrics?.quadrant] ?? 4;
+        const qb = Q_ORDER[b._metrics?.quadrant] ?? 4;
+        if (qa !== qb) return sortDir === 'asc' ? qa - qb : qb - qa;
+        // Tiebreak within same quadrant: RS Momentum descending
+        const ma = a._metrics?.rsMomentum ?? -Infinity;
+        const mb = b._metrics?.rsMomentum ?? -Infinity;
+        return mb - ma;
+      }
       const get = r => {
         const m = r._metrics;
         if (sortKey === 'rsRatioCurrent') return m?.rsRatioCurrent ?? -Infinity;
-        if (sortKey === 'rsMomentum')      return m?.rsMomentum ?? -Infinity;
+        if (sortKey === 'rsMomentum')     return m?.rsMomentum ?? -Infinity;
         if (sortKey === 'roc')            return m?.roc ?? -Infinity;
         if (sortKey === 'pctFromHigh')    return m?.pctFromHigh ?? -Infinity;
-        if (sortKey === 'quadrant')       return m?.quadrant ?? '';
         if (sortKey === '_name')          return r._name ?? '';
         if (sortKey === 'total_stocks')   return r.total_stocks ?? 0;
         return -Infinity;
@@ -460,7 +472,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', backgroundColor: t.panel, borderRadius: 8, border: `1px solid ${t.border}`, padding: 3, gap: 2 }}>
           {Object.entries(tabConfig).map(([k, v]) => (
-            <button key={k} onClick={() => { setTab(k); setSearch(''); setSortKey('rsRatioCurrent'); setSortDir('desc'); }}
+            <button key={k} onClick={() => { setTab(k); setSearch(''); setSortKey('quadrant'); setSortDir('asc'); }}
               style={{ padding: '6px 14px', borderRadius: 6, border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer', backgroundColor: tab === k ? '#2563eb' : 'transparent', color: tab === k ? '#fff' : t.muted, transition: 'all 0.2s' }}>
               {v.label}
             </button>
