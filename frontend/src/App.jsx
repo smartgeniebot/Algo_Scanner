@@ -37,7 +37,7 @@ function App() {
   const [firstDailyBase, setFirstDailyBase] = useState([]);
   const [fdbLoading, setFdbLoading] = useState(false);
   const [fdbSearch, setFdbSearch] = useState('');
-  const [fdbSort, setFdbSort] = useState({ key: 'signal_date', direction: 'desc' });
+  const [fdbSort, setFdbSort] = useState({ key: 'first_base_date', direction: 'desc' });
 
   const [fdbTriggerStatus, setFdbTriggerStatus] = useState('idle');
   const [fdbTriggerLog, setFdbTriggerLog] = useState([]);
@@ -981,7 +981,7 @@ function App() {
 function FirstDailyBaseView({ t, theme, stocks, loading, search, setSearch, sort, setSort, formatDT, onRefresh }) {
   const fdbGridStyle = {
     display: 'grid',
-    gridTemplateColumns: '1.2fr 0.8fr 0.8fr 0.8fr 0.8fr 1.8fr',
+    gridTemplateColumns: '1.2fr 0.8fr 1fr 1fr 1.8fr',
     width: '100%',
     alignItems: 'center',
     textAlign: 'center',
@@ -997,9 +997,9 @@ function FirstDailyBaseView({ t, theme, stocks, loading, search, setSearch, sort
   const sorted = useMemo(() => {
     const items = [...filtered];
     if (!sort.key) return items;
+    const dateKeys = ['first_base_date', 'second_base_date'];
     items.sort((a, b) => {
       let va = a[sort.key], vb = b[sort.key];
-      const dateKeys = ['step1_date', 'step2_date', 'signal_date'];
       if (dateKeys.includes(sort.key)) {
         va = va ? new Date(va).getTime() : (sort.direction === 'asc' ? Infinity : -Infinity);
         vb = vb ? new Date(vb).getTime() : (sort.direction === 'asc' ? Infinity : -Infinity);
@@ -1020,11 +1020,10 @@ function FirstDailyBaseView({ t, theme, stocks, loading, search, setSearch, sort
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: t.bgApp }}>
       <div style={{ backgroundColor: t.bgPanel, margin: '15px', borderRadius: '10px', border: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
 
-        {/* Header bar */}
         <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.border}`, backgroundColor: t.bgApp, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <div style={{ fontWeight: '700', fontSize: '16px' }}>
-              1st Daily Base &nbsp;<span style={{ fontWeight: '400', fontSize: '13px', color: t.textMuted }}>EMA50 &gt; SMA200 → EMA20 &lt; EMA50 → EMA9 &gt; EMA20 (last 14 days)</span>
+              1st Daily Base &nbsp;<span style={{ fontWeight: '400', fontSize: '13px', color: t.textMuted }}>EMA50 &gt; SMA200 → pullback → EMA9 re-entry (last 30 days)</span>
             </div>
             <span style={{ fontWeight: '700', fontSize: '13px', color: t.textMuted }}>({sorted.length})</span>
             <button
@@ -1042,26 +1041,24 @@ function FirstDailyBaseView({ t, theme, stocks, loading, search, setSearch, sort
           />
         </div>
 
-        {/* Table header */}
         <div style={{ ...fdbGridStyle, padding: '14px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '13px', color: t.textMuted, backgroundColor: t.bgPanel, flexShrink: 0 }}>
           <div onClick={() => toggleSort('fyers_symbol')} style={hdrStyle}>Ticker ⇅</div>
           <div onClick={() => toggleSort('rs_score')} style={hdrStyle}>RS Score ⇅</div>
-          <div onClick={() => toggleSort('step1_date')} style={hdrStyle}>Step 1 (EMA50&gt;SMA200) ⇅</div>
-          <div onClick={() => toggleSort('step2_date')} style={hdrStyle}>Step 2 (EMA20&lt;EMA50) ⇅</div>
-          <div onClick={() => toggleSort('signal_date')} style={hdrStyle}>Signal (EMA9&gt;EMA20) ⇅</div>
+          <div onClick={() => toggleSort('first_base_date')} style={hdrStyle}>1st Base Date ⇅</div>
+          <div onClick={() => toggleSort('second_base_date')} style={hdrStyle}>2nd Base Date ⇅</div>
           <div onClick={() => toggleSort('industry')} style={hdrStyle}>Industry &amp; Sector ⇅</div>
         </div>
 
-        {/* Table body */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {loading ? (
             <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>Scanning...</div>
           ) : sorted.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>
-              {stocks.length === 0 ? 'No signals found in the last 14 days. Run the 1st Daily Base scan to populate results.' : 'No results match your search.'}
+              {stocks.length === 0 ? 'No signals in the last 30 days. Run the 1st Daily Base scan from Settings to populate results.' : 'No results match your search.'}
             </div>
           ) : sorted.map((s, idx) => {
             const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
+            const has2nd = !!s.second_base_date;
             return (
               <div
                 key={idx}
@@ -1073,9 +1070,10 @@ function FirstDailyBaseView({ t, theme, stocks, loading, search, setSearch, sort
                 <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '3px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>
                   {s.rs_score ?? '--'}
                 </div>
-                <div style={{ color: t.textTicker, fontWeight: '600' }}>{formatDT(s.step1_date)}</div>
-                <div style={{ color: t.textTicker, fontWeight: '600' }}>{formatDT(s.step2_date)}</div>
-                <div style={{ fontWeight: '800', color: '#10b981' }}>{formatDT(s.signal_date)}</div>
+                <div style={{ fontWeight: '700', color: '#10b981' }}>{formatDT(s.first_base_date)}</div>
+                <div style={{ fontWeight: has2nd ? '800' : '400', color: has2nd ? '#f59e0b' : t.textMuted }}>
+                  {has2nd ? formatDT(s.second_base_date) : '--'}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
                   <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
                   <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>

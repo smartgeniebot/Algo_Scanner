@@ -683,9 +683,10 @@ async def get_first_daily_base():
 
         cursor.execute("""
             SELECT fyers_symbol, stock_name, sector, industry, basic_industry,
-                   rs_score, step1_date, step2_date, signal_date
+                   rs_score, first_base_date, second_base_date
             FROM first_daily_base
-            ORDER BY signal_date DESC, rs_score DESC NULLS LAST
+            ORDER BY GREATEST(first_base_date, COALESCE(second_base_date, first_base_date)) DESC,
+                     rs_score DESC NULLS LAST
         """)
         rows = cursor.fetchall()
         cursor.close()

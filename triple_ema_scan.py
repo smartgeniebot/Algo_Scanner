@@ -2,9 +2,10 @@ import time
 import pandas as pd
 import pandas_ta_classic as ta
 from fyers_apiv3 import fyersModel
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from tqdm import tqdm
 import psycopg2
+from psycopg2.extras import execute_values
 from config import NEON_URL
 
 CLIENT_ID = "QTKF8KZDM9-100"
@@ -37,70 +38,77 @@ def fetch_safe(fyers_obj, payload):
             time.sleep(3)
     return res
 
-def find_first_daily_base(df):
+def find_bases(df):
     """
-    State machine: find the FIRST occurrence of the 3-step sequence.
+    State machine: find 1st and 2nd base signals after EMA50 crosses above SMA200.
 
-    Step 1: EMA50 crosses above SMA200  (macro uptrend established)
-    Step 2: After step 1, EMA20 crosses below EMA50  (first pullback)
-    Step 3: After step 2, EMA9 crosses above EMA20   (re-entry trigger) ← signal date
+    Step 1 : EMA50 crosses above SMA200  — macro uptrend anchor (once only)
+    Base N  : after step 1 (or previous base signal):
+                a) EMA20 crosses below EMA50  — pullback
+                b) EMA9  crosses above EMA20  — re-entry signal ← base signal date
 
-    Returns (step1_date, step2_date, step3_date) as YYYY-MM-DD strings, or None.
+    Returns (first_base_date, second_base_date) as YYYY-MM-DD strings.
+    Either can be None if that base has not yet occurred within the data window.
+    Returns None entirely if step 1 has not occurred.
     """
     if len(df) < 210:
         return None
 
     df = df.copy().reset_index(drop=True)
-    df['E9']  = ta.ema(df['close'], 9)
-    df['E20'] = ta.ema(df['close'], 20)
-    df['E50'] = ta.ema(df['close'], 50)
+    df['E9']   = ta.ema(df['close'], 9)
+    df['E20']  = ta.ema(df['close'], 20)
+    df['E50']  = ta.ema(df['close'], 50)
     df['S200'] = ta.sma(df['close'], 200)
 
     df = df.dropna(subset=['E9', 'E20', 'E50', 'S200']).reset_index(drop=True)
     if len(df) < 5:
         return None
 
-    # Shift-1 for previous bar values
-    df['pE9']  = df['E9'].shift(1)
-    df['pE20'] = df['E20'].shift(1)
-    df['pE50'] = df['E50'].shift(1)
+    df['pE9']   = df['E9'].shift(1)
+    df['pE20']  = df['E20'].shift(1)
+    df['pE50']  = df['E50'].shift(1)
     df['pS200'] = df['S200'].shift(1)
     df = df.dropna(subset=['pE9', 'pE20', 'pE50', 'pS200']).reset_index(drop=True)
 
-    state = 0          # 0=waiting for step1, 1=waiting for step2, 2=waiting for step3
-    step1_date = None
-    step2_date = None
+    # States:
+    #   0 = waiting for EMA50 > SMA200 cross (step 1)
+    #   1 = waiting for EMA20 < EMA50 cross (pullback leg of current base)
+    #   2 = waiting for EMA9  > EMA20 cross (signal leg of current base)
+    state = 0
+    bases_found = []   # list of signal dates, max 2
 
     for i in range(len(df)):
         row = df.iloc[i]
         dt = datetime.fromtimestamp(int(float(row['date'])), IST).strftime('%Y-%m-%d')
 
         if state == 0:
-            # Step 1: EMA50 crosses above SMA200
             if row['E50'] > row['S200'] and row['pE50'] <= row['pS200']:
-                step1_date = dt
                 state = 1
 
         elif state == 1:
-            # Step 2 (first occurrence after step 1): EMA20 crosses below EMA50
             if row['E20'] < row['E50'] and row['pE20'] >= row['pE50']:
-                step2_date = dt
                 state = 2
 
         elif state == 2:
-            # Step 3 (first occurrence after step 2): EMA9 crosses above EMA20
             if row['E9'] > row['E20'] and row['pE9'] <= row['pE20']:
-                step3_date = dt
-                return (step1_date, step2_date, step3_date)
+                bases_found.append(dt)
+                if len(bases_found) == 2:
+                    break
+                # After recording the base signal, watch for the next pullback
+                state = 1
 
-    return None
+    if not bases_found:
+        return None
+
+    first  = bases_found[0]
+    second = bases_found[1] if len(bases_found) > 1 else None
+    return (first, second)
 
 
 def run_first_daily_base_scan():
     conn = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
 
-    # Ensure tables exist
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS job_progress (
             id SERIAL PRIMARY KEY, job TEXT NOT NULL,
@@ -109,41 +117,50 @@ def run_first_daily_base_scan():
     """)
     cursor.execute("DELETE FROM job_progress WHERE job = 'first_daily_base'")
 
+    # Create/migrate table — add second_base_date if upgrading from old schema
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS first_daily_base (
-            id              SERIAL PRIMARY KEY,
-            fyers_symbol    TEXT UNIQUE NOT NULL,
-            stock_name      TEXT,
-            sector          TEXT,
-            industry        TEXT,
-            basic_industry  TEXT,
-            rs_score        FLOAT,
-            step1_date      TEXT,
-            step2_date      TEXT,
-            signal_date     TEXT,
-            updated_at      TIMESTAMPTZ DEFAULT NOW()
+            id               SERIAL PRIMARY KEY,
+            fyers_symbol     TEXT UNIQUE NOT NULL,
+            stock_name       TEXT,
+            sector           TEXT,
+            industry         TEXT,
+            basic_industry   TEXT,
+            rs_score         FLOAT,
+            first_base_date  TEXT,
+            second_base_date TEXT,
+            updated_at       TIMESTAMPTZ DEFAULT NOW()
         )
     """)
+    cursor.execute("""
+        ALTER TABLE first_daily_base
+        ADD COLUMN IF NOT EXISTS second_base_date TEXT
+    """)
+    # Remove old columns if they exist from previous schema
+    for col in ('step1_date', 'step2_date', 'signal_date'):
+        try:
+            cursor.execute(f"ALTER TABLE first_daily_base DROP COLUMN IF EXISTS {col}")
+        except Exception:
+            conn.rollback()
     conn.commit()
 
     log_progress(cursor, conn, "🚀 1st Daily Base Scan Started")
 
     fyers = get_fyers()
     today_ist = datetime.now(IST).date()
-    cutoff_date = (today_ist - timedelta(days=14)).strftime('%Y-%m-%d')
+    cutoff_date = (today_ist - timedelta(days=30)).strftime('%Y-%m-%d')
 
-    # Fetch all stocks with their metadata
     cursor.execute("""
         SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score
         FROM stocks
         WHERE fyers_symbol IS NOT NULL
     """)
     stocks = cursor.fetchall()
-    log_progress(cursor, conn, f"📊 Scanning {len(stocks)} stocks for 1st Daily Base pattern...")
+    log_progress(cursor, conn, f"📊 Scanning {len(stocks)} stocks | cutoff={cutoff_date}...")
 
     SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
     signals = []
-    failed = []
+    failed  = []
 
     for symbol, stock_name, sector, industry, basic_industry, rs_score in tqdm(stocks):
         try:
@@ -153,9 +170,8 @@ def run_first_daily_base_scan():
             res = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
                                      "range_from": range_from, "range_to": range_to, "cont_flag": "1"})
 
-            # Series fallback
             if not isinstance(res, dict) or "candles" not in res or not res["candles"]:
-                ticker_base   = symbol.rsplit("-", 1)[0]
+                ticker_base    = symbol.rsplit("-", 1)[0]
                 current_series = symbol.rsplit("-", 1)[-1]
                 for series in [s for s in SERIES_PRIORITY if s != current_series]:
                     candidate = f"{ticker_base}-{series}"
@@ -170,20 +186,22 @@ def run_first_daily_base_scan():
                     continue
 
             df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
-            result = find_first_daily_base(df)
+            result = find_bases(df)
 
             if result is None:
                 continue
 
-            step1_date, step2_date, signal_date = result
+            first_base, second_base = result
 
-            # Only include if signal (step 3) is within last 14 days
-            if signal_date < cutoff_date:
+            # Include if either base signal is within the last 30 days
+            most_recent = second_base if second_base else first_base
+            if most_recent < cutoff_date:
                 continue
 
             signals.append((symbol, stock_name, sector, industry, basic_industry, rs_score,
-                            step1_date, step2_date, signal_date))
-            log_progress(cursor, conn, f"🎯 {symbol} → Step1: {step1_date} | Step2: {step2_date} | Signal: {signal_date}")
+                            first_base, second_base))
+            log_progress(cursor, conn,
+                f"🎯 {symbol} → 1st Base: {first_base} | 2nd Base: {second_base or '--'}")
 
         except Exception as e:
             log_progress(cursor, conn, f"❌ Error on {symbol}: {e}")
@@ -196,20 +214,17 @@ def run_first_daily_base_scan():
         finally:
             time.sleep(0.1)
 
-    # Replace table contents with fresh signals
     cursor.execute("DELETE FROM first_daily_base")
     if signals:
-        from psycopg2.extras import execute_values
         execute_values(cursor, """
             INSERT INTO first_daily_base
                 (fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
-                 step1_date, step2_date, signal_date, updated_at)
+                 first_base_date, second_base_date, updated_at)
             VALUES %s
-        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], datetime.now(IST)) for s in signals])
+        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], datetime.now(IST)) for s in signals])
     conn.commit()
 
-    total = len(stocks)
-    log_progress(cursor, conn, f"✅ {len(signals)} signals found | {len(failed)} failed | {total} scanned")
+    log_progress(cursor, conn, f"✅ {len(signals)} signals | {len(failed)} failed | {len(stocks)} scanned")
     log_progress(cursor, conn, "🎉 1st Daily Base Scan Complete!")
 
     cursor.close()
