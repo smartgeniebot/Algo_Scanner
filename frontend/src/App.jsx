@@ -295,8 +295,8 @@ function App() {
     try {
       const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-first-daily-base', { method: 'POST' });
       const d = await r.json();
-      if (d.status !== 'success') { log(`❌ ${d.message}`); setFdbTriggerStatus('error'); return; }
-    } catch (e) { log(`❌ Network error: ${e.message}`); setFdbTriggerStatus('error'); return; }
+      if (d.status !== 'success') { log(`❌ ${d.message || 'Unknown error — endpoint may not be deployed yet'}`); setFdbTriggerStatus('error'); return; }
+    } catch (e) { log(`❌ Network error: ${e.message} — deploy the latest backend to Render first`); setFdbTriggerStatus('error'); return; }
 
     log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
     let lastId = 0;
