@@ -4,6 +4,7 @@ import IndustryHeatmap from './components/IndustryHeatmap';
 import MicroIndustryHeatmap from './components/MicroIndustryHeatmap';
 import StocksDirectory from './components/StocksDirectory';
 import FilterTree from './components/FilterTree';
+import RSRatioReport from './components/RSRatioReport';
 
 function App() {
   const [hierarchy, setHierarchy] = useState({});
@@ -535,6 +536,7 @@ function App() {
             <button onClick={() => setActiveView('industries')} style={{...tabStyle, backgroundColor: activeView === 'industries' ? t.bgPanel : 'transparent', color: activeView === 'industries' ? t.textMain : t.textMuted}}>🏭 Macro Industries</button>
             <button onClick={() => setActiveView('micro')} style={{...tabStyle, backgroundColor: activeView === 'micro' ? t.bgPanel : 'transparent', color: activeView === 'micro' ? t.textMain : t.textMuted}}>🔬 Micro Industries</button>
             <button onClick={() => setActiveView('directory')} style={{...tabStyle, backgroundColor: activeView === 'directory' ? t.bgPanel : 'transparent', color: activeView === 'directory' ? t.textMain : t.textMuted}}>📋 Stocks Directory</button>
+            <button onClick={() => setActiveView('rsratio')} style={{...tabStyle, backgroundColor: activeView === 'rsratio' ? t.bgPanel : 'transparent', color: activeView === 'rsratio' ? t.textMain : t.textMuted}}>📐 RS Ratio</button>
             <button onClick={() => setActiveView('settings')} style={{...tabStyle, backgroundColor: activeView === 'settings' ? t.bgPanel : 'transparent', color: activeView === 'settings' ? t.textMain : t.textMuted}}>⚙️ Settings</button>
           </div>
         </div>
@@ -752,6 +754,10 @@ function App() {
         </div>
       ) : activeView === 'directory' ? (
         <StocksDirectory theme={theme} t={t} />
+      ) : activeView === 'rsratio' ? (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
+          <RSRatioReport theme={theme} onScanNavigate={triggerScanFromHeatmap} />
+        </div>
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, padding: '40px' }}>
           <div style={{ maxWidth: '600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
