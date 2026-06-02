@@ -177,7 +177,7 @@ function QuadrantBadge({ q }) {
 // ── 10D Dir cell ──────────────────────────────────────────────────────────────
 function DirCell({ slopeRising, pctPerDay }) {
   return (
-    <span style={{ fontSize: 12, fontWeight: 700, color: slopeRising ? '#16a34a' : '#dc2626', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+    <span style={{ fontSize: 12, fontWeight: 700, color: slopeRising ? '#16a34a' : '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, whiteSpace: 'nowrap' }}>
       {slopeRising ? '▲' : '▼'} {slopeRising ? 'Rising' : 'Falling'}
       <span style={{ fontWeight: 500, opacity: 0.75 }}>({pctPerDay.toFixed(2)}%/d)</span>
     </span>
@@ -495,15 +495,15 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              <TH label="Group"         k="_name" />
-              <TH label="Stocks"        k="total_stocks" align="center" />
-              <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap' }}>RS Ratio ({DAYS}D)</th>
-              <TH label="RS Ratio"      k="rsRatioCurrent" align="right" />
-              <TH label="10D Dir"       k="roc" align="left" />
-              <TH label="ROC of Ratio"  k="roc" align="right" />
-              <TH label="RS Momentum"   k="rsMomentum" align="right" />
-              <TH label="Quadrant"      k="quadrant" />
-              <TH label="% from High"   k="pctFromHigh" align="right" />
+              <TH label="Group"         k="_name"          align="center" />
+              <TH label="Stocks"        k="total_stocks"   align="center" />
+              <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap', textAlign: 'center' }}>RS Ratio ({DAYS}D)</th>
+              <TH label="RS Ratio"      k="rsRatioCurrent" align="center" />
+              <TH label="10D Dir"       k="roc"            align="center" />
+              <TH label="ROC of Ratio"  k="roc"            align="center" />
+              <TH label="RS Momentum"   k="rsMomentum"     align="center" />
+              <TH label="Quadrant"      k="quadrant"       align="center" />
+              <TH label="% from High"   k="pctFromHigh"    align="center" />
               <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, textAlign: 'center', whiteSpace: 'nowrap' }}>Action</th>
             </tr>
           </thead>
@@ -528,30 +528,30 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                   onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
                   onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
 
-                  <td style={{ padding: '11px 14px', fontWeight: 700, fontSize: 13, maxWidth: 180 }}>
+                  <td style={{ padding: '11px 14px', fontWeight: 700, fontSize: 13, maxWidth: 180, textAlign: 'center' }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row._name}>{row._name}</div>
                     {tab !== 'sector' && row.sector && <div style={{ fontSize: 10, color: t.muted, marginTop: 2 }}>{row.sector}</div>}
                   </td>
 
                   <td style={{ padding: '11px 14px', textAlign: 'center', fontSize: 13, color: t.muted, fontWeight: 600 }}>{row.total_stocks}</td>
 
-                  <td style={{ padding: '7px 14px' }}>
+                  <td style={{ padding: '7px 14px', textAlign: 'center' }}>
                     {m ? <Sparkline rsRatioSeries={m.sparklineSeries} quadrant={m.quadrant} /> : <span style={{ color: t.muted, fontSize: 11 }}>No data</span>}
                   </td>
 
-                  <td style={{ padding: '11px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                  <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: rsRatioClr }}>{rsRatioStr}</span>
                   </td>
 
-                  <td style={{ padding: '11px 14px' }}>
+                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
                     {m ? <DirCell slopeRising={m.slopeRising} pctPerDay={m.pctPerDay} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
                   </td>
 
-                  <td style={{ padding: '11px 14px', textAlign: 'right' }}>
+                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
                     <span style={{ fontSize: 13, fontWeight: 800, color: rocClr }}>{rocStr}</span>
                   </td>
 
-                  <td style={{ padding: '11px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                  <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}
                     title="RS Momentum = 100 + ROC. Above 100 = accelerating. Below 100 = decelerating.">
                     {m ? (
                       <span style={{ fontSize: 13, fontWeight: 700, color: m.rsMomentum >= 100 ? '#16a34a' : '#dc2626' }}>
@@ -560,11 +560,11 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                     ) : <span style={{ color: t.muted }}>—</span>}
                   </td>
 
-                  <td style={{ padding: '11px 14px' }}>
+                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
                     {m ? <QuadrantBadge q={m.quadrant} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
                   </td>
 
-                  <td style={{ padding: '11px 14px', textAlign: 'right' }}>
+                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: pctClr }}>{pctStr}</span>
                   </td>
 
