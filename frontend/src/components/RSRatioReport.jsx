@@ -284,15 +284,140 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
         </div>
 
         {showInfo && (
-          <div style={{ marginTop: 14, padding: '14px 18px', backgroundColor: t.panel, border: `1px solid ${t.border}`, borderRadius: 8, borderLeft: '3px solid #2563eb', fontSize: 12, color: t.muted, lineHeight: 1.9 }}>
-            <code style={{ display: 'block', color: isDark ? '#7dd3fc' : '#1d4ed8', marginBottom: 6 }}>
-              Raw Ratio  = sector_avg_close ÷ Nifty500_close (stored daily)<br />
-              Norm Ratio = raw_ratio ÷ raw_ratio[day_0]  →  1.0 on day 1, moves up/down from there<br />
-              ROC        = (norm_today − norm_10d_ago) / norm_10d_ago × 100<br />
-              10D Dir    = linear regression slope of last 10 norm values, expressed as %/day<br />
-              Trend      : HIGH = top 10% of 63d range · RISING = +slope · FALLING = −slope · LOW = bottom 10%
-            </code>
-            <span style={{ color: '#16a34a', fontWeight: 700 }}>Look for:</span> Trend = RISING or HIGH · ROC positive · 10D Dir rising · % from High near 0%.
+          <div style={{ marginTop: 14, backgroundColor: t.panel, border: `1px solid ${t.border}`, borderRadius: 8, overflow: 'hidden' }}>
+
+            {/* Title bar */}
+            <div style={{ padding: '12px 18px', borderBottom: `1px solid ${t.border}`, backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>Formula & What to Look For</div>
+            </div>
+
+            {/* Formula block */}
+            <div style={{ padding: '14px 18px', borderBottom: `1px solid ${t.border}`, backgroundColor: isDark ? 'rgba(30,41,59,0.4)' : '#f8fafc' }}>
+              <code style={{ display: 'block', fontSize: 12, lineHeight: 2, color: isDark ? '#7dd3fc' : '#1e40af', fontFamily: 'monospace' }}>
+                Raw Ratio&nbsp;&nbsp;= sector_avg_close ÷ Nifty500_close &nbsp;(computed daily, stored in DB)<br />
+                Norm Ratio = raw_ratio ÷ raw_ratio[day_1] &nbsp;→ &nbsp;starts at 1.0, drifts up or down<br />
+                ROC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= (norm_today − norm_10d_ago) ÷ norm_10d_ago × 100<br />
+                10D Dir&nbsp;&nbsp;&nbsp;&nbsp;= linear regression slope of last 10 norm values, as %/day<br />
+                % from High = (norm_today − max_norm_63d) ÷ max_norm_63d × 100
+              </code>
+              <div style={{ marginTop: 10, padding: '8px 12px', backgroundColor: isDark ? 'rgba(22,163,74,0.1)' : '#f0fdf4', borderRadius: 6, border: `1px solid ${isDark ? 'rgba(22,163,74,0.3)' : '#bbf7d0'}`, fontSize: 12, color: isDark ? '#4ade80' : '#15803d', fontWeight: 600 }}>
+                Look for: Trend = RISING or HIGH &nbsp;·&nbsp; ROC positive &nbsp;·&nbsp; 10D Dir rising &nbsp;·&nbsp; % from High near 0%
+              </div>
+            </div>
+
+            {/* Column-by-column explanation */}
+            <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 0 }}>
+
+              {[
+                {
+                  col: 'RS RATIO (63D) — Sparkline',
+                  color: '#3b82f6',
+                  formula: 'norm_ratio = (avg_sector_close ÷ Nifty500_close) ÷ same_ratio_on_day_1',
+                  what: 'A 63-day line chart of how the sector has performed relative to Nifty500. The line starts at 1.0 on day 1 (63 trading days ago). If it rises above 1.0, the sector is outperforming Nifty. If it falls below, it is underperforming.',
+                  lookfor: 'A line that is steadily rising and near its recent highs = money flowing into this sector consistently.',
+                  colors: 'Green fill = HIGH trend · Blue = RISING · Red = FALLING · Purple = LOW',
+                },
+                {
+                  col: 'RATIO',
+                  color: '#8b5cf6',
+                  formula: 'norm_ratio on the most recent trading day',
+                  what: 'The current normalized ratio value. 1.0 means the sector has performed exactly in line with Nifty500 over the 63-day window. Above 1.0 means the sector is stronger than Nifty500 since the window started. Below 1.0 means it has underperformed.',
+                  lookfor: 'Values above 1.0 are outperformers. The higher the number, the stronger the sector has been vs Nifty over the past 63 days. Green = above 1.0 · Red = below 1.0.',
+                  example: '1.0523 → sector is 5.23% stronger than Nifty500 since day 1 of the window · 0.9015 → 9.85% weaker',
+                },
+                {
+                  col: '10D DIR',
+                  color: '#0ea5e9',
+                  formula: 'Linear regression slope of the last 10 normalized ratio values, converted to %/day',
+                  what: 'Shows the direction and speed of the relative strength trend over the last 10 trading days (2 calendar weeks). It tells you whether the sector is currently gaining or losing ground vs Nifty, and how fast.',
+                  lookfor: '▲ Rising = sector is gaining momentum vs Nifty right now. ▼ Falling = sector is losing momentum. The %/d number shows the speed — 0.34%/d is a strong move, 0.02%/d is a slow drift.',
+                  example: '▲ Rising (0.34%/d) → gaining 0.34% per day vs Nifty · ▼ Falling (0.17%/d) → losing 0.17% per day vs Nifty',
+                },
+                {
+                  col: 'ROC OF RATIO',
+                  color: '#f59e0b',
+                  formula: '(norm_ratio_today − norm_ratio_10d_ago) ÷ norm_ratio_10d_ago × 100',
+                  what: 'Rate of Change — the total percentage move in relative strength over the last 10 trading days. While 10D Dir shows the daily slope, ROC gives you the total accumulated change over the period. A sector can have a small daily slope but a large ROC if the move started 10 days ago.',
+                  lookfor: 'Positive ROC = the sector has strengthened vs Nifty over last 10 days. Negative = weakened. ROC above +2% is strong inflow. ROC below -2% is meaningful outflow. Consistency between ROC and 10D Dir confirms a real trend.',
+                  example: '+2.65% → ratio is 2.65% higher than it was 10 trading days ago · -3.73% → ratio lost 3.73%',
+                },
+                {
+                  col: 'TREND',
+                  color: '#16a34a',
+                  formula: 'Position of current norm ratio within its 63-day min-max range + 10-day slope direction',
+                  what: [
+                    { badge: 'HIGH', cfg: TREND_CFG.HIGH, desc: 'Ratio is in the top 10% of its 63-day range. The sector has been outperforming Nifty recently and is near its strongest point in the window. This is sustained leadership.' },
+                    { badge: 'RISING', cfg: TREND_CFG.RISING, desc: 'Ratio is in the upper half of its 63-day range AND the 10-day slope is positive. The sector is outperforming and momentum is building. Best time to rotate in.' },
+                    { badge: 'FALLING', cfg: TREND_CFG.FALLING, desc: 'The 10-day slope is negative — the sector is losing ground vs Nifty. Even if the ratio is still above 1.0, the direction is down. Momentum is fading — consider rotating out.' },
+                    { badge: 'LOW', cfg: TREND_CFG.LOW, desc: 'Ratio is in the bottom 10% of its 63-day range. The sector is at its weakest relative to Nifty. Avoid unless you see an early RISING reversal forming.' },
+                  ],
+                  lookfor: 'RISING and HIGH are actionable. FALLING is a warning. LOW is avoid.',
+                },
+                {
+                  col: '% FROM HIGH',
+                  color: '#ef4444',
+                  formula: '(norm_ratio_today − max_norm_ratio_in_63d) ÷ max_norm_ratio_in_63d × 100',
+                  what: 'How far the sector\'s relative strength is from its 63-day peak. 0.0% means the sector is at its strongest right now. -9.7% means it has pulled back 9.7% from its peak relative strength.',
+                  lookfor: '0.0% = sector is at peak RS → strongest outperformer right now, shown as — (no pullback). Small negatives like -1% to -3% = healthy pullback from strength, still strong. Large negatives like -10% or worse = significant loss of relative strength, confirm with Trend before acting.',
+                  example: '— (0.0%) → at 63d high right now · -9.7% → has fallen 9.7% from its 63d peak RS',
+                },
+              ].map((item, i) => (
+                <div key={i} style={{ padding: '14px 0', borderBottom: i < 5 ? `1px solid ${t.border}` : 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+                  {/* Column name */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 3, height: 16, backgroundColor: item.color, borderRadius: 2, flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, fontWeight: 900, color: t.text, letterSpacing: '0.5px', textTransform: 'uppercase' }}>{item.col}</span>
+                  </div>
+
+                  {/* Formula */}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: 2, flexShrink: 0, width: 60 }}>Formula</span>
+                    <code style={{ fontSize: 11, color: isDark ? '#7dd3fc' : '#1e40af', lineHeight: 1.6 }}>{item.formula}</code>
+                  </div>
+
+                  {/* What it means */}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: 2, flexShrink: 0, width: 60 }}>Means</span>
+                    {item.col === 'TREND' ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {item.what.map(({ badge, cfg, desc }) => (
+                          <div key={badge} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                            <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 800, color: cfg.color, backgroundColor: cfg.bg, border: `1px solid ${cfg.border}`, flexShrink: 0, marginTop: 1 }}>{badge}</span>
+                            <span style={{ fontSize: 12, color: t.muted, lineHeight: 1.6 }}>{desc}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 12, color: t.muted, lineHeight: 1.6 }}>{item.what}</span>
+                    )}
+                  </div>
+
+                  {/* Example */}
+                  {item.example && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: 2, flexShrink: 0, width: 60 }}>Example</span>
+                      <span style={{ fontSize: 11, color: isDark ? '#94a3b8' : '#475569', lineHeight: 1.6, fontStyle: 'italic' }}>{item.example}</span>
+                    </div>
+                  )}
+
+                  {/* Look for */}
+                  {item.lookfor && typeof item.lookfor === 'string' && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: '#16a34a', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: 2, flexShrink: 0, width: 60 }}>Look for</span>
+                      <span style={{ fontSize: 12, color: isDark ? '#4ade80' : '#15803d', lineHeight: 1.6, fontWeight: 500 }}>{item.lookfor}</span>
+                    </div>
+                  )}
+                  {item.colors && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: 2, flexShrink: 0, width: 60 }}>Colors</span>
+                      <span style={{ fontSize: 11, color: t.muted, lineHeight: 1.6 }}>{item.colors}</span>
+                    </div>
+                  )}
+
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
