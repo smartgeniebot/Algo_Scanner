@@ -1,0 +1,48 @@
+name: Chart Hawks RS Ratio Snapshot
+
+on:
+  # Runs at 20:30 UTC (02:00 AM IST) — after market_engine finishes at ~01:00 AM IST
+  schedule:
+    - cron: '30 20 * * 1-5'   # Mon–Fri only (trading days)
+  workflow_dispatch:           # Manual trigger with optional backfill input
+    inputs:
+      backfill:
+        description: 'Pass --backfill to populate the last 63 trading days (first-run only)'
+        required: false
+        default: ''
+
+jobs:
+  rs-snapshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: 🔐 Auto Login (Fyers)
+        env:
+          FYERS_ID:   ${{ secrets.FYERS_ID }}
+          TOTP_KEY:   ${{ secrets.TOTP_KEY }}
+          PIN:        ${{ secrets.PIN }}
+          CLIENT_ID:  ${{ secrets.CLIENT_ID }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        run: python auth.py
+
+      - name: 📐 Sector RS Ratio Snapshot
+        env:
+          NEON_URL: ${{ secrets.NEON_URL }}
+        run: |
+          if [ "${{ github.event.inputs.backfill }}" = "--backfill" ]; then
+            python sector_rs_snapshot.py --backfill
+          else
+            python sector_rs_snapshot.py
+          fi

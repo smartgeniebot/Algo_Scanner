@@ -243,6 +243,62 @@ async def get_micro_industry_heatmap():
     return rows
 
 
+@app.get("/api/sector-rs-history")
+async def get_sector_rs_history(group_type: str = "sector", days: int = 63):
+    """
+    Returns up to `days` rows of daily RS ratio per group from sector_rs_history.
+    Used by the RS Ratio Report to draw sparklines, compute 10D direction, ROC and trend.
+
+    Response shape:
+    {
+      "GroupName": [
+        {"trade_date": "2025-05-01", "rs_ratio": 1.0234, "stock_count": 12},
+        ...
+      ],
+      ...
+    }
+    """
+    if group_type not in ("sector", "industry", "basic_industry"):
+        return {"error": "group_type must be sector, industry or basic_industry"}
+    if days < 2 or days > 252:
+        days = 63
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+    # Check table exists first
+    cursor.execute("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables
+            WHERE table_name = 'sector_rs_history'
+        )
+    """)
+    if not cursor.fetchone()["exists"]:
+        cursor.close()
+        conn.close()
+        return {}
+
+    cursor.execute("""
+        SELECT group_name, trade_date, rs_ratio, stock_count
+        FROM sector_rs_history
+        WHERE group_type = %s
+          AND trade_date >= CURRENT_DATE - %s
+        ORDER BY group_name, trade_date ASC
+    """, (group_type, days))
+
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    result = {}
+    for row in rows:
+        name = row["group_name"]
+        result.setdefault(name, []).append({
+            "trade_date":  str(row["trade_date"]),
+            "rs_ratio":    float(row["rs_ratio"]),
+            "stock_count": int(row["stock_count"]),
+        })
+    return result
 
 
 @app.post("/api/refresh-nse-tickers")
