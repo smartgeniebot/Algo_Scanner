@@ -179,6 +179,24 @@ def do_write():
     for group_type, group_dict in groups.items():
         batch = []
         for group_name, symbols in group_dict.items():
+            # Only keep stocks that have price data on EVERY date in the window.
+            # This prevents composition jumps when new stocks are added mid-period.
+            eligible = [
+                sym for sym in symbols
+                if sym in stock_closes and
+                   all(d in stock_closes[sym].index for d in all_dates)
+            ]
+            if not eligible:
+                # Fallback: use stocks present on at least 90% of dates
+                min_dates = int(len(all_dates) * 0.9)
+                eligible = [
+                    sym for sym in symbols
+                    if sym in stock_closes and
+                       sum(1 for d in all_dates if d in stock_closes[sym].index) >= min_dates
+                ]
+            if not eligible:
+                continue
+
             for trade_date in all_dates:
                 if trade_date not in nifty_closes.index:
                     continue
@@ -188,8 +206,8 @@ def do_write():
 
                 closes_on_date = [
                     float(stock_closes[sym][trade_date])
-                    for sym in symbols
-                    if sym in stock_closes and trade_date in stock_closes[sym].index
+                    for sym in eligible
+                    if trade_date in stock_closes[sym].index
                 ]
                 if not closes_on_date:
                     continue
@@ -200,7 +218,7 @@ def do_write():
                 batch.append((
                     str(group_type),
                     str(group_name),
-                    str(trade_date),        # plain str → psycopg2 casts to DATE fine
+                    str(trade_date),
                     round(float(rs_ratio), 6),
                     int(len(closes_on_date)),
                 ))
