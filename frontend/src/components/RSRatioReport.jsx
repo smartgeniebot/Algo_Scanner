@@ -99,6 +99,12 @@ function computeMetrics(series) {
   const highRS      = Math.max(...rsRatioSeries);
   const pctFromHigh = highRS > 0 ? ((rsRatioCurrent - highRS) / highRS) * 100 : 0;
 
+  // ── Sparkline: normalized raw ratio (day1 = 100) — smooth price trend ──
+  // Z-score series is noisy because the rolling mean shifts daily.
+  // Raw ratio normalized to 100 on day 1 shows the actual relative trend clearly.
+  const base0 = raw[0] || 1;
+  const sparklineSeries = raw.map(v => (v / base0) * 100);
+
   return {
     rsRatioCurrent,   // Z-score centred at 100
     rsMomentum,       // Z-score centred at 100
@@ -107,7 +113,8 @@ function computeMetrics(series) {
     slopeRising: slope > 0,
     pctPerDay,
     pctFromHigh,
-    rsRatioSeries,    // full series for sparkline
+    rsRatioSeries,    // Z-score series (used for RS Ratio value, RS Momentum, quadrant)
+    sparklineSeries,  // normalized raw ratio (used only for the sparkline visual)
   };
 }
 
@@ -517,7 +524,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                   <td style={{ padding: '11px 14px', textAlign: 'center', fontSize: 13, color: t.muted, fontWeight: 600 }}>{row.total_stocks}</td>
 
                   <td style={{ padding: '7px 14px' }}>
-                    {m ? <Sparkline rsRatioSeries={m.rsRatioSeries} quadrant={m.quadrant} /> : <span style={{ color: t.muted, fontSize: 11 }}>No data</span>}
+                    {m ? <Sparkline rsRatioSeries={m.sparklineSeries} quadrant={m.quadrant} /> : <span style={{ color: t.muted, fontSize: 11 }}>No data</span>}
                   </td>
 
                   <td style={{ padding: '11px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
