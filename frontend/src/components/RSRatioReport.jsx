@@ -264,18 +264,23 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       rows = rows.filter(r => r._name.toLowerCase().includes(lo));
     }
     // Quadrant rotation order: LEADING → IMPROVING → WEAKENING → LAGGING
-    // Within each quadrant sort by RS Momentum desc (highest momentum first)
+    // Within each quadrant: sort by Euclidean distance from center (100, 100)
+    // — original RRG method. Furthest from center = strongest signal = shown first.
+    // distance = sqrt((RS_Ratio - 100)^2 + (RS_Momentum - 100)^2)
     const Q_ORDER = { LEADING: 0, IMPROVING: 1, WEAKENING: 2, LAGGING: 3 };
+    const dist = r => {
+      const m = r._metrics;
+      if (!m) return 0;
+      return Math.sqrt((m.rsRatioCurrent - 100) ** 2 + (m.rsMomentum - 100) ** 2);
+    };
 
     return [...rows].sort((a, b) => {
       if (sortKey === 'quadrant') {
         const qa = Q_ORDER[a._metrics?.quadrant] ?? 4;
         const qb = Q_ORDER[b._metrics?.quadrant] ?? 4;
         if (qa !== qb) return sortDir === 'asc' ? qa - qb : qb - qa;
-        // Tiebreak within same quadrant: RS Momentum descending
-        const ma = a._metrics?.rsMomentum ?? -Infinity;
-        const mb = b._metrics?.rsMomentum ?? -Infinity;
-        return mb - ma;
+        // Within same quadrant: furthest from center (100,100) first
+        return dist(b) - dist(a);
       }
       const get = r => {
         const m = r._metrics;
