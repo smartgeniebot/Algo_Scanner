@@ -65,8 +65,8 @@ function computeMetrics(series) {
 
   return {
     rsRatioCurrent,   // e.g. 96.13 or 110.09
-    rsMomentum,       // e.g. 98.67 or 106.00
-    roc,              // e.g. -1.33 or +2.15
+    rsMomentum,       // e.g. 98.67 or 106.00  — RS Momentum centered at 100
+    roc,              // e.g. -1.33 or +2.15   — raw ROC input (rsMomentum = 100 + roc)
     quadrant,
     slopeRising: slope > 0,
     pctPerDay,
@@ -224,7 +224,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       const get = r => {
         const m = r._metrics;
         if (sortKey === 'rsRatioCurrent') return m?.rsRatioCurrent ?? -Infinity;
-        if (sortKey === 'rsMomentum')     return m?.rsMomentum ?? -Infinity;
+        if (sortKey === 'rsMomentum')      return m?.rsMomentum ?? -Infinity;
         if (sortKey === 'roc')            return m?.roc ?? -Infinity;
         if (sortKey === 'pctFromHigh')    return m?.pctFromHigh ?? -Infinity;
         if (sortKey === 'quadrant')       return m?.quadrant ?? '';
@@ -328,6 +328,14 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                   example: '+2.15% = RS Ratio is 2.15% higher than 10 days ago → accelerating outperformance · -1.33% = losing ground',
                 },
                 {
+                  col: 'RS MOMENTUM',
+                  color: '#10b981',
+                  formula: 'RS Momentum = 100 + ROC  →  i.e. 100 + ((RS_Ratio_today - RS_Ratio_10d_ago) / RS_Ratio_10d_ago × 100)',
+                  means: 'RS Momentum measures whether the RS Ratio itself is accelerating or decelerating. Centered at 100 — above 100 means the sector\'s relative strength is strengthening, below 100 means it is weakening. It is derived directly from ROC: if ROC is +2.15%, RS Momentum = 102.15. This is the Y-axis of the Dorsey Wright Relative Rotation Graph.',
+                  lookfor: 'Above 100 = RS Ratio accelerating upward → sector gaining vs Nifty. Below 100 = RS Ratio decelerating or falling → sector losing ground. Combined with RS Ratio > 100, gives LEADING quadrant. Combined with RS Ratio < 100, gives IMPROVING (early entry signal).',
+                  example: '102.15 = ROC is +2.15%, momentum positive → LEADING or IMPROVING · 98.67 = ROC is -1.33%, momentum fading → WEAKENING or LAGGING',
+                },
+                {
                   col: 'QUADRANT',
                   color: '#16a34a',
                   formula: 'RS Ratio vs 100 (benchmark line) + RS Momentum vs 100 (acceleration line)',
@@ -347,8 +355,8 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                   lookfor: '— or near 0% = sector at peak relative strength right now, combine with LEADING for strongest signal. Large negatives on LEADING sectors = pulling back but still strong fundamentally.',
                   example: '— = at 63d RS high right now · -14.6% = RS Ratio has fallen 14.6% from its 63d peak (like Diversified)',
                 },
-              ].map((item, i) => (
-                <div key={i} style={{ padding: '14px 0', borderBottom: i < 5 ? `1px solid ${t.border}` : 'none', display: 'flex', flexDirection: 'column', gap: 7 }}>
+              ].map((item, i, arr) => (
+                <div key={i} style={{ padding: '14px 0', borderBottom: i < arr.length - 1 ? `1px solid ${t.border}` : 'none', display: 'flex', flexDirection: 'column', gap: 7 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div style={{ width: 3, height: 16, backgroundColor: item.color, borderRadius: 2, flexShrink: 0 }} />
                     <span style={{ fontSize: 12, fontWeight: 900, color: t.text, letterSpacing: '0.5px', textTransform: 'uppercase' }}>{item.col}</span>
@@ -436,6 +444,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
               <TH label="RS Ratio"      k="rsRatioCurrent" align="right" />
               <TH label="10D Dir"       k="roc" align="left" />
               <TH label="ROC of Ratio"  k="roc" align="right" />
+              <TH label="RS Momentum"   k="rsMomentum" align="right" />
               <TH label="Quadrant"      k="quadrant" />
               <TH label="% from High"   k="pctFromHigh" align="right" />
               <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, textAlign: 'center', whiteSpace: 'nowrap' }}>Action</th>
@@ -443,9 +452,9 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
           </thead>
           <tbody>
             {histLoading ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
             ) : displayed.length === 0 ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
             ) : displayed.map((row, idx) => {
               const m = row._metrics;
               const isLast = idx === displayed.length - 1;
@@ -483,6 +492,15 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
 
                   <td style={{ padding: '11px 14px', textAlign: 'right' }}>
                     <span style={{ fontSize: 13, fontWeight: 800, color: rocClr }}>{rocStr}</span>
+                  </td>
+
+                  <td style={{ padding: '11px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                    title="RS Momentum = 100 + ROC. Above 100 = accelerating. Below 100 = decelerating.">
+                    {m ? (
+                      <span style={{ fontSize: 13, fontWeight: 700, color: m.rsMomentum >= 100 ? '#16a34a' : '#dc2626' }}>
+                        {m.rsMomentum.toFixed(2)}
+                      </span>
+                    ) : <span style={{ color: t.muted }}>—</span>}
                   </td>
 
                   <td style={{ padding: '11px 14px' }}>
