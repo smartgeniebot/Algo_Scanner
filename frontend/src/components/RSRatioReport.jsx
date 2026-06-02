@@ -2,23 +2,46 @@ import React, { useEffect, useState, useMemo } from 'react';
 
 const API = 'https://algo-scanner-lnck.onrender.com';
 const DAYS = 63;
-const ROC_PERIOD = 10;
+const JDK_PERIOD  = 14;   // SMA + StdDev window — original JdK parameter
+const ROC_PERIOD  = 10;   // ROC lookback — original JdK parameter
 
-// ── Dorsey Wright / RRG formulas ─────────────────────────────────────────────
+// ── Exact JdK RRG formulas (Julius de Kempenaer) ─────────────────────────────
 //
-// RS Ratio   = (last_raw_ratio / mean_raw_ratio_63d) × 100
-//              > 100 = sector outperforming Nifty500 on average over the window
-//              < 100 = underperforming
+// RS Ratio   = 100 + (RS - SMA14(RS)) / StdDev14(RS)
+//   RS = sector_avg_close / Nifty500_close  (stored daily in sector_rs_history)
+//   Normalises the ratio as a Z-score centred at 100.
+//   > 100 = above average relative strength vs Nifty500
+//   < 100 = below average relative strength
 //
-// RS Momentum = 100 + 10d_ROC_of_RS_Ratio
-//              > 100 = RS Ratio is accelerating (gaining faster or losing slower)
-//              < 100 = RS Ratio is decelerating
+// ROC        = (RS_Ratio[t] - RS_Ratio[t-10]) / RS_Ratio[t-10] × 100
 //
-// Quadrant (original Dorsey Wright / RRG):
+// RS Momentum = 100 + (ROC - SMA14(ROC)) / StdDev14(ROC)
+//   Normalises the rate-of-change as a Z-score centred at 100.
+//   > 100 = momentum accelerating  (ROC above its recent norm)
+//   < 100 = momentum decelerating  (ROC below its recent norm)
+//
+// Quadrants:
 //   LEADING   : RS Ratio ≥ 100  AND  RS Momentum ≥ 100
 //   WEAKENING : RS Ratio ≥ 100  AND  RS Momentum <  100
 //   IMPROVING : RS Ratio <  100  AND  RS Momentum ≥ 100
 //   LAGGING   : RS Ratio <  100  AND  RS Momentum <  100
+
+// ── Math helpers ─────────────────────────────────────────────────────────────
+function rollingMean(vals, period) {
+  return vals.map((_, i) => {
+    const w = vals.slice(Math.max(0, i - period + 1), i + 1);
+    return w.reduce((a, b) => a + b, 0) / w.length;
+  });
+}
+
+function rollingPStdDev(vals, period) {
+  return vals.map((_, i) => {
+    const w = vals.slice(Math.max(0, i - period + 1), i + 1);
+    if (w.length < 2) return 0.0001;
+    const m = w.reduce((a, b) => a + b, 0) / w.length;
+    return Math.sqrt(w.reduce((s, v) => s + (v - m) ** 2, 0) / w.length) || 0.0001;
+  });
+}
 
 function linRegSlope(vals) {
   const n = vals.length;
@@ -31,42 +54,55 @@ function linRegSlope(vals) {
 }
 
 function computeMetrics(series) {
-  if (!series || series.length < ROC_PERIOD + 1) return null;
+  if (!series || series.length < JDK_PERIOD + ROC_PERIOD + 2) return null;
 
   const raw = series.map(d => d.rs_ratio);
-  const mean = raw.reduce((a, b) => a + b, 0) / raw.length;
 
-  // RS Ratio series (centered at 100)
-  const rsRatioSeries = raw.map(v => (v / mean) * 100);
+  // ── RS Ratio: Z-score of raw ratio using 14-period SMA + StdDev ──
+  const rsMean   = rollingMean(raw, JDK_PERIOD);
+  const rsStdDev = rollingPStdDev(raw, JDK_PERIOD);
+  const rsRatioSeries = raw.map((v, i) =>
+    100 + (v - rsMean[i]) / rsStdDev[i]
+  );
   const rsRatioCurrent = rsRatioSeries[rsRatioSeries.length - 1];
 
-  // RS Momentum = 100 + 10d ROC of RS Ratio
-  const cur  = rsRatioSeries[rsRatioSeries.length - 1];
-  const past = rsRatioSeries[rsRatioSeries.length - 1 - ROC_PERIOD];
-  const roc  = past ? ((cur - past) / past) * 100 : 0;
-  const rsMomentum = 100 + roc;
+  // ── ROC of RS Ratio (10-period) ──
+  const rocSeries = rsRatioSeries.map((v, i) => {
+    if (i < ROC_PERIOD) return 0;
+    const past = rsRatioSeries[i - ROC_PERIOD];
+    return past ? ((v - past) / past) * 100 : 0;
+  });
+  const rocCurrent = rocSeries[rocSeries.length - 1];
 
-  // Quadrant
+  // ── RS Momentum: Z-score of ROC using 14-period SMA + StdDev ──
+  const rocMean   = rollingMean(rocSeries, JDK_PERIOD);
+  const rocStdDev = rollingPStdDev(rocSeries, JDK_PERIOD);
+  const rsMomSeries = rocSeries.map((v, i) =>
+    100 + (v - rocMean[i]) / rocStdDev[i]
+  );
+  const rsMomentum = rsMomSeries[rsMomSeries.length - 1];
+
+  // ── Quadrant ──
   let quadrant;
   if      (rsRatioCurrent >= 100 && rsMomentum >= 100) quadrant = 'LEADING';
   else if (rsRatioCurrent >= 100 && rsMomentum <  100) quadrant = 'WEAKENING';
   else if (rsRatioCurrent <  100 && rsMomentum >= 100) quadrant = 'IMPROVING';
   else                                                  quadrant = 'LAGGING';
 
-  // 10D Dir: slope of last 10 RS Ratio values as %/day
-  const last10 = rsRatioSeries.slice(-ROC_PERIOD);
-  const slope  = linRegSlope(last10);
-  const meanL10 = last10.reduce((a, b) => a + b, 0) / last10.length || 1;
+  // ── 10D Dir: slope of last 10 RS Ratio values, as %/day ──
+  const last10    = rsRatioSeries.slice(-ROC_PERIOD);
+  const slope     = linRegSlope(last10);
+  const meanL10   = last10.reduce((a, b) => a + b, 0) / last10.length || 1;
   const pctPerDay = Math.abs((slope / meanL10) * 100);
 
-  // % from 63d high of RS Ratio series
-  const highRS    = Math.max(...rsRatioSeries);
+  // ── % from 63d high of RS Ratio series ──
+  const highRS      = Math.max(...rsRatioSeries);
   const pctFromHigh = highRS > 0 ? ((rsRatioCurrent - highRS) / highRS) * 100 : 0;
 
   return {
-    rsRatioCurrent,   // e.g. 96.13 or 110.09
-    rsMomentum,       // e.g. 98.67 or 106.00  — RS Momentum centered at 100
-    roc,              // e.g. -1.33 or +2.15   — raw ROC input (rsMomentum = 100 + roc)
+    rsRatioCurrent,   // Z-score centred at 100
+    rsMomentum,       // Z-score centred at 100
+    roc: rocCurrent,  // raw 10d ROC of RS Ratio (input to RS Momentum)
     quadrant,
     slopeRising: slope > 0,
     pctPerDay,
@@ -264,9 +300,9 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 900, letterSpacing: '-0.3px' }}>Dorsey Wright RS Ratio Report</h2>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 900, letterSpacing: '-0.3px' }}>Relative Rotation Graph (RRG)</h2>
             <p style={{ margin: '4px 0 0', fontSize: 13, color: t.muted }}>
-              Relative Rotation — sector RS Ratio vs RS Momentum · 63-day window vs Nifty500
+              JdK RS Ratio vs RS Momentum · 63-day window vs Nifty500 · Original Julius de Kempenaer formula
             </p>
           </div>
           <button onClick={() => setShowInfo(v => !v)}
@@ -284,10 +320,11 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
 
             <div style={{ padding: '14px 18px', borderBottom: `1px solid ${t.border}`, backgroundColor: isDark ? 'rgba(30,41,59,0.4)' : '#f8fafc' }}>
               <code style={{ display: 'block', fontSize: 12, lineHeight: 2, color: isDark ? '#7dd3fc' : '#1e40af', fontFamily: 'monospace' }}>
-                RS Ratio   = (sector_avg_close / Nifty500_close) / mean_of_same_63d  x  100<br />
-                RS Momentum = 100 + ((RS_Ratio_today - RS_Ratio_10d_ago) / RS_Ratio_10d_ago x 100)<br />
-                ROC         = RS_Ratio_today - RS_Ratio_10d_ago  /  RS_Ratio_10d_ago  x  100<br />
-                % from High = (RS_Ratio_today - max_RS_Ratio_63d) / max_RS_Ratio_63d  x  100
+                RS          = sector_avg_close / Nifty500_close  (stored daily)<br />
+                RS Ratio    = 100 + (RS - SMA14(RS)) / StdDev14(RS)<br />
+                ROC         = (RS_Ratio[t] - RS_Ratio[t-10]) / RS_Ratio[t-10] x 100<br />
+                RS Momentum = 100 + (ROC - SMA14(ROC)) / StdDev14(ROC)<br />
+                % from High = (RS_Ratio_today - max_RS_Ratio_63d) / max_RS_Ratio_63d x 100
               </code>
               <div style={{ marginTop: 10, padding: '8px 12px', backgroundColor: isDark ? 'rgba(22,163,74,0.1)' : '#f0fdf4', borderRadius: 6, border: `1px solid ${isDark ? 'rgba(22,163,74,0.3)' : '#bbf7d0'}`, fontSize: 12, color: isDark ? '#4ade80' : '#15803d', fontWeight: 600 }}>
                 Look for: LEADING quadrant · RS Ratio above 100 · RS Momentum above 100 · ROC positive · % from High near 0%
@@ -299,41 +336,42 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                 {
                   col: 'RS RATIO (63D) — Sparkline',
                   color: '#3b82f6',
-                  formula: 'RS Ratio series plotted over 63 trading days. Centerline = 100.',
-                  means: 'Each point = (sector_avg_close / Nifty500_close) / 63d_mean × 100. Shows whether the sector has been above or below its average relative strength. Color = quadrant.',
-                  lookfor: 'A line trending up and staying above 100 = sustained outperformance. Crossing above 100 from below = potential IMPROVING → LEADING rotation.',
+                  formula: 'Full 63-day series of RS Ratio = 100 + (RS - SMA14(RS)) / StdDev14(RS)',
+                  means: 'Line chart of the RS Ratio Z-score over 63 trading days. Centerline is 100. Each point shows how many standard deviations the sector\'s raw ratio (avg_close / Nifty500_close) is from its own 14-day average. Above 100 = outperforming on a normalised basis. Below 100 = underperforming.',
+                  lookfor: 'Line trending upward and staying above 100 = sustained relative strength. Crossing from below 100 to above = IMPROVING → LEADING rotation beginning.',
+                  colors: 'Green = LEADING · Orange = IMPROVING · Dark Orange = WEAKENING · Red = LAGGING',
                 },
                 {
                   col: 'RS RATIO (current value)',
                   color: '#8b5cf6',
-                  formula: '(sector_avg_close_today / Nifty500_close_today) / mean_ratio_63d × 100',
-                  means: 'Current position vs the 63-day mean. Above 100 = sector is outperforming Nifty500 on average over the window. Below 100 = underperforming. The further from 100, the stronger/weaker.',
-                  lookfor: 'Above 100 = outperformer. The higher, the stronger. Below 100 = underperformer. Green = above 100, Red = below 100.',
-                  example: '110.09 = 10% above its 63d mean relative strength → outperforming Nifty · 96.13 = 4% below → underperforming',
+                  formula: '100 + (RS_today - SMA14(RS)) / StdDev14(RS)  where RS = sector_avg_close / Nifty500_close',
+                  means: 'The current Z-score of the sector\'s raw price ratio vs its own 14-day history. This is the X-axis of the RRG chart. Above 100 = the sector\'s relative strength is above its recent average. Below 100 = below average. Values typically stay in the 95–105 range — small deviations are significant.',
+                  lookfor: 'Above 100 = outperformer (green). Below 100 = underperformer (red). Combined with RS Momentum to determine quadrant.',
+                  example: '101.32 = RS is 1.32 std devs above its 14d mean → outperforming · 99.78 = below average → underperforming',
                 },
                 {
                   col: '10D DIR',
                   color: '#0ea5e9',
-                  formula: 'Linear regression slope of the last 10 RS Ratio values, expressed as %/day',
-                  means: 'Direction and speed of RS Ratio movement over the last 10 trading days. Independent of whether the sector is above or below 100 — purely about which way it is moving right now.',
-                  lookfor: '▲ Rising = RS Ratio gaining ground vs Nifty right now. ▼ Falling = losing ground. Use alongside RS Momentum to confirm quadrant direction.',
-                  example: '▲ Rising (0.34%/d) = RS Ratio growing 0.34% per day · ▼ Falling (0.17%/d) = shrinking 0.17% per day',
+                  formula: 'Linear regression slope of the last 10 RS Ratio values, expressed as %/day of the mean',
+                  means: 'Shows which direction the RS Ratio is trending over the last 10 trading days and how fast. This is a supplementary indicator — the quadrant already captures direction via RS Momentum, but 10D Dir shows the raw speed of the move.',
+                  lookfor: '▲ Rising = RS Ratio moving up vs Nifty. ▼ Falling = moving down. Use to confirm quadrant transitions.',
+                  example: '▲ Rising (0.03%/d) = slow upward drift · ▲ Rising (0.15%/d) = strong upward momentum',
                 },
                 {
                   col: 'ROC OF RATIO',
                   color: '#f59e0b',
-                  formula: '(RS_Ratio_today - RS_Ratio_10d_ago) / RS_Ratio_10d_ago × 100',
-                  means: 'Total % change in RS Ratio over the last 10 trading days. This is the raw input to RS Momentum (RS Momentum = 100 + ROC). Positive = sector is gaining relative strength. Negative = losing it.',
-                  lookfor: 'Positive ROC = money flowing into this sector vs Nifty. Negative = flowing out. ROC above +2% is a strong signal. Confirms the quadrant: LEADING needs both RS Ratio > 100 and ROC > 0.',
-                  example: '+2.15% = RS Ratio is 2.15% higher than 10 days ago → accelerating outperformance · -1.33% = losing ground',
+                  formula: '(RS_Ratio[t] - RS_Ratio[t-10]) / RS_Ratio[t-10] × 100',
+                  means: 'Raw 10-day rate of change of the RS Ratio. This is the input that feeds into RS Momentum. Positive = RS Ratio higher than 10 days ago. Negative = lower. RS Momentum then Z-scores this ROC against its own 14-day history to normalise it.',
+                  lookfor: 'Positive ROC = relative strength gaining. Negative = losing. Watch for ROC turning positive after a period of negatives — early signal of LAGGING → IMPROVING rotation.',
+                  example: '+3.60% = RS Ratio is 3.6% higher than 10 days ago · -1.27% = 1.27% lower than 10 days ago',
                 },
                 {
                   col: 'RS MOMENTUM',
                   color: '#10b981',
-                  formula: 'RS Momentum = 100 + ROC  →  i.e. 100 + ((RS_Ratio_today - RS_Ratio_10d_ago) / RS_Ratio_10d_ago × 100)',
-                  means: 'RS Momentum measures whether the RS Ratio itself is accelerating or decelerating. Centered at 100 — above 100 means the sector\'s relative strength is strengthening, below 100 means it is weakening. It is derived directly from ROC: if ROC is +2.15%, RS Momentum = 102.15. This is the Y-axis of the Dorsey Wright Relative Rotation Graph.',
-                  lookfor: 'Above 100 = RS Ratio accelerating upward → sector gaining vs Nifty. Below 100 = RS Ratio decelerating or falling → sector losing ground. Combined with RS Ratio > 100, gives LEADING quadrant. Combined with RS Ratio < 100, gives IMPROVING (early entry signal).',
-                  example: '102.15 = ROC is +2.15%, momentum positive → LEADING or IMPROVING · 98.67 = ROC is -1.33%, momentum fading → WEAKENING or LAGGING',
+                  formula: '100 + (ROC - SMA14(ROC)) / StdDev14(ROC)  — Z-score of the 10d ROC, centred at 100',
+                  means: 'This is the Y-axis of the RRG chart (original JdK formula). It measures whether the current ROC is unusually high or low compared to recent ROC history. Above 100 = the rate of change is accelerating relative to its own norm. Below 100 = decelerating. Because it is Z-scored, even a positive ROC can produce RS Momentum < 100 if that ROC is weaker than usual.',
+                  lookfor: 'Above 100 = momentum accelerating (green). Below 100 = decelerating (red). Combined with RS Ratio: both > 100 = LEADING. RS Ratio < 100 but RS Momentum > 100 = IMPROVING (early entry). RS Ratio > 100 but RS Momentum < 100 = WEAKENING (exit signal).',
+                  example: '101.57 = ROC is above its 14d norm → momentum building · 98.95 = ROC is below its 14d norm → momentum fading',
                 },
                 {
                   col: 'QUADRANT',
@@ -531,7 +569,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       </div>
 
       <div style={{ marginTop: 10, fontSize: 11, color: t.muted, textAlign: 'right' }}>
-        RS Ratio centered at 100 (mean of 63d window) · RS Momentum = 100 + 10d ROC · Updated daily after market close
+        JdK RRG formula · RS Ratio = Z-score(SMA14) · RS Momentum = Z-score(ROC10, SMA14) · Updated daily after market close
       </div>
     </div>
   );
