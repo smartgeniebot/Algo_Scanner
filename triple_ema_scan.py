@@ -40,16 +40,12 @@ def fetch_safe(fyers_obj, payload):
 
 def find_bases(df):
     """
-    State machine: find 1st and 2nd base signals after EMA50 crosses above SMA200.
-
-    Step 1 : EMA50 crosses above SMA200  — macro uptrend anchor (once only)
-    Base N  : after step 1 (or previous base signal):
-                a) EMA20 crosses below EMA50  — pullback
-                b) EMA9  crosses above EMA20  — re-entry signal ← base signal date
-
-    Returns (first_base_date, second_base_date) as YYYY-MM-DD strings.
-    Either can be None if that base has not yet occurred within the data window.
-    Returns None entirely if step 1 has not occurred.
+    State machine over combined 2-year daily data:
+      Step 1: EMA50 crosses above SMA200  — one-time anchor
+      Base 1: first  EMA20 < EMA50  then  EMA9 > EMA20
+      Base 2: next   EMA20 < EMA50  then  EMA9 > EMA20
+    Returns (first_base_date, second_base_date). second_base_date is None if not yet occurred.
+    Returns None if step 1 never fired.
     """
     if len(df) < 210:
         return None
@@ -59,41 +55,16 @@ def find_bases(df):
     df['E20']  = ta.ema(df['close'], 20)
     df['E50']  = ta.ema(df['close'], 50)
     df['S200'] = ta.sma(df['close'], 200)
-
-    df = df.dropna(subset=['E9', 'E20', 'E50', 'S200']).reset_index(drop=True)
-    if len(df) < 5:
-        return None
-
     df['pE9']   = df['E9'].shift(1)
     df['pE20']  = df['E20'].shift(1)
     df['pE50']  = df['E50'].shift(1)
     df['pS200'] = df['S200'].shift(1)
-    df = df.dropna(subset=['pE9', 'pE20', 'pE50', 'pS200']).reset_index(drop=True)
+    df = df.dropna(subset=['E9','E20','E50','S200','pE9','pE20','pE50','pS200']).reset_index(drop=True)
+    if len(df) < 5:
+        return None
 
-    # Determine starting state from where we are in the cycle at bar 0:
-    #
-    #  E50 < S200                           => state 0: waiting for macro uptrend
-    #  E50 > S200, E20 > E50, E9 <= E20    => state 1: uptrend established, no base yet
-    #  E50 > S200, E20 > E50, E9 > E20     => 1st base completed before window (EMA9 still above
-    #                                          EMA20); mark with 'prior', next pullback is 2nd base
-    #  E50 > S200, E20 < E50, E9 < E20     => state 2: mid-pullback, waiting for EMA9 re-entry
-    #  E50 > S200, E20 < E50, E9 > E20     => pullback done, EMA9 still above; wait for next pullback
-    first = df.iloc[0]
-    if first['E50'] <= first['S200']:
-        state = 0
-        bases_found = []
-    elif first['E20'] >= first['E50']:
-        if first['E9'] > first['E20']:
-            # 1st base completed before our data window
-            state = 1
-            bases_found = ['prior']
-        else:
-            state = 1
-            bases_found = []
-    else:
-        # E50 > S200, E20 < E50
-        state = 2 if first['E9'] < first['E20'] else 1
-        bases_found = []
+    state = 0
+    bases_found = []
 
     for i in range(len(df)):
         row = df.iloc[i]
@@ -114,17 +85,10 @@ def find_bases(df):
                     break
                 state = 1
 
-    real_bases = [b for b in bases_found if b != 'prior']
-    if not real_bases:
+    if not bases_found:
         return None
 
-    if 'prior' in bases_found:
-        # 1st base was before the data window; real_bases[0] is the 2nd base
-        return (None, real_bases[0])
-
-    first  = real_bases[0]
-    second = real_bases[1] if len(real_bases) > 1 else None
-    return (first, second)
+    return (bases_found[0], bases_found[1] if len(bases_found) > 1 else None)
 
 
 def run_first_daily_base_scan():
@@ -184,28 +148,47 @@ def run_first_daily_base_scan():
 
     for symbol, stock_name, sector, industry, basic_industry, rs_score in tqdm(stocks):
         try:
-            range_from = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
-            range_to   = today_ist.strftime("%Y-%m-%d")
+            # Two fetches: warmup batch (days 730-365) + signal batch (last 364 days)
+            # Combined gives ~500 bars so SMA200 warmup (200 bars) leaves ~300 usable bars
+            warmup_from = (today_ist - timedelta(days=730)).strftime("%Y-%m-%d")
+            warmup_to   = (today_ist - timedelta(days=365)).strftime("%Y-%m-%d")
+            main_from   = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
+            main_to     = today_ist.strftime("%Y-%m-%d")
 
-            res = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
-                                     "range_from": range_from, "range_to": range_to, "cont_flag": "1"})
+            res_w = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
+                                       "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
+            res_m = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
+                                       "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
 
-            if not isinstance(res, dict) or "candles" not in res or not res["candles"]:
+            # Series fallback if main fetch failed
+            if not isinstance(res_m, dict) or "candles" not in res_m or not res_m["candles"]:
                 ticker_base    = symbol.rsplit("-", 1)[0]
                 current_series = symbol.rsplit("-", 1)[-1]
                 for series in [s for s in SERIES_PRIORITY if s != current_series]:
                     candidate = f"{ticker_base}-{series}"
-                    fallback  = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
-                                                   "range_from": range_from, "range_to": range_to, "cont_flag": "1"})
-                    if isinstance(fallback, dict) and "candles" in fallback and fallback["candles"]:
-                        res    = fallback
+                    fb_w = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
+                                              "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
+                    fb_m = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
+                                              "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
+                    if isinstance(fb_m, dict) and "candles" in fb_m and fb_m["candles"]:
+                        res_w  = fb_w
+                        res_m  = fb_m
                         symbol = candidate
                         break
                 else:
                     failed.append(symbol)
                     continue
 
-            df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
+            frames = []
+            if isinstance(res_w, dict) and "candles" in res_w and res_w["candles"]:
+                frames.append(pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol']))
+            if isinstance(res_m, dict) and "candles" in res_m and res_m["candles"]:
+                frames.append(pd.DataFrame(res_m['candles'], columns=['date','open','high','low','close','vol']))
+            if not frames:
+                failed.append(symbol)
+                continue
+
+            df = pd.concat(frames).drop_duplicates(subset='date').sort_values('date').reset_index(drop=True)
             result = find_bases(df)
 
             if result is None:
