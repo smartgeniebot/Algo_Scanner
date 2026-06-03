@@ -70,12 +70,30 @@ def find_bases(df):
     df['pS200'] = df['S200'].shift(1)
     df = df.dropna(subset=['pE9', 'pE20', 'pE50', 'pS200']).reset_index(drop=True)
 
-    # States:
-    #   0 = waiting for EMA50 > SMA200 cross (step 1)
-    #   1 = waiting for EMA20 < EMA50 cross (pullback leg of current base)
-    #   2 = waiting for EMA9  > EMA20 cross (signal leg of current base)
-    state = 0
-    bases_found = []   # list of signal dates, max 2
+    # Determine starting state from where we are in the cycle at bar 0:
+    #
+    #  E50 < S200                           => state 0: waiting for macro uptrend
+    #  E50 > S200, E20 > E50, E9 <= E20    => state 1: uptrend established, no base yet
+    #  E50 > S200, E20 > E50, E9 > E20     => 1st base completed before window (EMA9 still above
+    #                                          EMA20); mark with 'prior', next pullback is 2nd base
+    #  E50 > S200, E20 < E50, E9 < E20     => state 2: mid-pullback, waiting for EMA9 re-entry
+    #  E50 > S200, E20 < E50, E9 > E20     => pullback done, EMA9 still above; wait for next pullback
+    first = df.iloc[0]
+    if first['E50'] <= first['S200']:
+        state = 0
+        bases_found = []
+    elif first['E20'] >= first['E50']:
+        if first['E9'] > first['E20']:
+            # 1st base completed before our data window
+            state = 1
+            bases_found = ['prior']
+        else:
+            state = 1
+            bases_found = []
+    else:
+        # E50 > S200, E20 < E50
+        state = 2 if first['E9'] < first['E20'] else 1
+        bases_found = []
 
     for i in range(len(df)):
         row = df.iloc[i]
@@ -94,14 +112,18 @@ def find_bases(df):
                 bases_found.append(dt)
                 if len(bases_found) == 2:
                     break
-                # After recording the base signal, watch for the next pullback
                 state = 1
 
-    if not bases_found:
+    real_bases = [b for b in bases_found if b != 'prior']
+    if not real_bases:
         return None
 
-    first  = bases_found[0]
-    second = bases_found[1] if len(bases_found) > 1 else None
+    if 'prior' in bases_found:
+        # 1st base was before the data window; real_bases[0] is the 2nd base
+        return (None, real_bases[0])
+
+    first  = real_bases[0]
+    second = real_bases[1] if len(real_bases) > 1 else None
     return (first, second)
 
 
