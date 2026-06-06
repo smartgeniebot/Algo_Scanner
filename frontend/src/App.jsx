@@ -116,6 +116,7 @@ function App() {
     setSelectedMicros(new Set());
     setSelectedFundamentals([]);
     setStocks([]);
+    setFirstDailyBase([]);
     setSearchTerm('');
     setActiveChart(null);
   };
