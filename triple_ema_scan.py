@@ -41,11 +41,12 @@ def fetch_safe(fyers_obj, payload):
 def find_bases(df):
     """
     State machine over combined 2-year daily data:
-      Step 1: EMA50 crosses above SMA200  — one-time anchor
-      Base 1: first  EMA20 < EMA50  then  EMA9 > EMA20
-      Base 2: next   EMA20 < EMA50  then  EMA9 > EMA20
+      Cycle start : EMA50 crosses above SMA200
+      Reset       : EMA50 drops below SMA200 at any point → back to state 0
+      Base 1      : EMA20 < EMA50 pullback → EMA9 > EMA20 re-entry (EMA50 must be > SMA200)
+      Base 2      : EMA20 < EMA50 pullback again → EMA9 > EMA20 re-entry (EMA50 must be > SMA200)
     Returns (first_base_date, second_base_date). second_base_date is None if not yet occurred.
-    Returns None if step 1 never fired.
+    Returns None if no valid cycle completed.
     """
     if len(df) < 210:
         return None
@@ -70,16 +71,25 @@ def find_bases(df):
         row = df.iloc[i]
         dt = datetime.fromtimestamp(int(float(row['date'])), IST).strftime('%Y-%m-%d')
 
+        # Global reset: EMA50 drops below SMA200 at any active state → restart cycle
+        if state > 0 and row['E50'] < row['S200']:
+            state = 0
+            bases_found = []
+            continue
+
         if state == 0:
+            # Cycle starts only on EMA50 crossing above SMA200
             if row['E50'] > row['S200'] and row['pE50'] <= row['pS200']:
                 state = 1
 
         elif state == 1:
+            # Wait for EMA20 pullback below EMA50
             if row['E20'] < row['E50'] and row['pE20'] >= row['pE50']:
                 state = 2
 
         elif state == 2:
-            if row['E9'] > row['E20'] and row['pE9'] <= row['pE20']:
+            # EMA9 re-entry above EMA20; EMA50 must still be above SMA200
+            if row['E9'] > row['E20'] and row['pE9'] <= row['pE20'] and row['E50'] > row['S200']:
                 bases_found.append(dt)
                 if len(bases_found) == 2:
                     break
