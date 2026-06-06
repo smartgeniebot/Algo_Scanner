@@ -489,18 +489,25 @@ function App() {
   const toggleSort = (key) => setSortConfig({ key, direction: sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc' });
   const toggleFdbSort = (key) => setFdbSort({ key, direction: fdbSort.key === key && fdbSort.direction === 'desc' ? 'asc' : 'desc' });
 
-  // Early Daily Bases: filter by selectedMicros + searchTerm + sort
+  // Early Daily Bases: filter by selectedMicros + fundamentals + searchTerm + sort
   const filteredFdb = useMemo(() => {
     let items = firstDailyBase;
     if (selectedMicros.size > 0) {
       items = items.filter(s => selectedMicros.has(s.basic_industry));
+    }
+    if (selectedFundamentals.length > 0) {
+      items = items.filter(s => {
+        if (selectedFundamentals.includes('high_growth') && s.is_high_roce) return true;
+        if (selectedFundamentals.includes('moderate_growth') && s.is_moderate_growth) return true;
+        return false;
+      });
     }
     if (searchTerm) {
       const lowerSearch = searchTerm.toLowerCase();
       items = items.filter(s => Object.values(s).some(v => String(v || '').toLowerCase().includes(lowerSearch)));
     }
     return items;
-  }, [firstDailyBase, selectedMicros, searchTerm]);
+  }, [firstDailyBase, selectedMicros, selectedFundamentals, searchTerm]);
 
   const sortedFdb = useMemo(() => {
     const items = [...filteredFdb];

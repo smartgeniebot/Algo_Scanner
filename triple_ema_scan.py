@@ -147,9 +147,11 @@ def run_first_daily_base_scan(lookback_days=30):
     """)
     conn.commit()
 
-    # Migrate old schema: add new columns, drop old ones
-    for col in ('first_base_date', 'second_base_date'):
-        cursor.execute(f"ALTER TABLE first_daily_base ADD COLUMN IF NOT EXISTS {col} TEXT")
+    # Migrate schema: add new columns, drop old ones
+    for col, coltype in [('first_base_date', 'TEXT'), ('second_base_date', 'TEXT'),
+                         ('is_high_roce', 'BOOLEAN DEFAULT FALSE'),
+                         ('is_moderate_growth', 'BOOLEAN DEFAULT FALSE')]:
+        cursor.execute(f"ALTER TABLE first_daily_base ADD COLUMN IF NOT EXISTS {col} {coltype}")
     conn.commit()
     for col in ('step1_date', 'step2_date', 'signal_date'):
         cursor.execute(f"ALTER TABLE first_daily_base DROP COLUMN IF EXISTS {col}")
@@ -162,7 +164,8 @@ def run_first_daily_base_scan(lookback_days=30):
     cutoff_date = (today_ist - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
 
     cursor.execute("""
-        SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score
+        SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
+               is_high_roce, is_moderate_growth
         FROM stocks
         WHERE fyers_symbol IS NOT NULL
     """)
@@ -173,7 +176,7 @@ def run_first_daily_base_scan(lookback_days=30):
     signals = []
     failed  = []
 
-    for symbol, stock_name, sector, industry, basic_industry, rs_score in tqdm(stocks):
+    for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
         try:
             # Two fetches: warmup batch (days 730-365) + signal batch (last 364 days)
             # Combined gives ~500 bars so SMA200 warmup (200 bars) leaves ~300 usable bars
@@ -229,7 +232,7 @@ def run_first_daily_base_scan(lookback_days=30):
                 continue
 
             signals.append((symbol, stock_name, sector, industry, basic_industry, rs_score,
-                            first_base, second_base))
+                            first_base, second_base, is_high_roce, is_moderate_growth))
             log_progress(cursor, conn,
                 f"🎯 {symbol} → 1st Base: {first_base} | 2nd Base: {second_base or '--'}")
 
@@ -261,9 +264,9 @@ def run_first_daily_base_scan(lookback_days=30):
         execute_values(cursor, """
             INSERT INTO first_daily_base
                 (fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
-                 first_base_date, second_base_date, updated_at)
+                 first_base_date, second_base_date, is_high_roce, is_moderate_growth, updated_at)
             VALUES %s
-        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], datetime.now(IST)) for s in signals])
+        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], datetime.now(IST)) for s in signals])
     conn.commit()
 
     log_progress(cursor, conn, f"✅ {len(signals)} signals | {len(failed)} failed | {len(stocks)} scanned")

@@ -682,7 +682,8 @@ async def get_first_daily_base(lookback_days: int = 30):
 
         cursor.execute("""
             SELECT fyers_symbol, stock_name, sector, industry, basic_industry,
-                   rs_score, first_base_date, second_base_date
+                   rs_score, first_base_date, second_base_date,
+                   is_high_roce, is_moderate_growth
             FROM first_daily_base
             WHERE GREATEST(first_base_date, COALESCE(second_base_date, first_base_date)) >= %s
             ORDER BY GREATEST(first_base_date, COALESCE(second_base_date, first_base_date)) DESC,
