@@ -1,3 +1,4 @@
+import argparse
 import time
 import pandas as pd
 import pandas_ta_classic as ta
@@ -64,6 +65,12 @@ def find_bases(df):
     if len(df) < 5:
         return None
 
+    # States:
+    #  0 - waiting for EMA50 to cross above SMA200 (cycle start)
+    #  1 - waiting for EMA20 to cross below EMA50 (fresh crossover required, Base 1 pullback)
+    #  2 - waiting for EMA9 to cross above EMA20 (Base 1 re-entry)
+    #  3 - waiting for EMA20 to drop below EMA50 (Base 2 pullback; already-below also accepted)
+    #  4 - waiting for EMA9 to cross above EMA20 (Base 2 re-entry)
     state = 0
     bases_found = []
 
@@ -83,17 +90,27 @@ def find_bases(df):
                 state = 1
 
         elif state == 1:
-            # Wait for EMA20 pullback below EMA50
+            # Base 1 pullback: require a fresh EMA20 crossover below EMA50
             if row['E20'] < row['E50'] and row['pE20'] >= row['pE50']:
                 state = 2
 
         elif state == 2:
-            # EMA9 re-entry above EMA20; EMA50 must still be above SMA200
+            # Base 1 re-entry: EMA9 crosses above EMA20; EMA50 must be above SMA200
             if row['E9'] > row['E20'] and row['pE9'] <= row['pE20'] and row['E50'] > row['S200']:
                 bases_found.append(dt)
-                if len(bases_found) == 2:
-                    break
-                state = 1
+                # Move to state 3; if EMA20 already below EMA50, go straight to state 4
+                state = 4 if row['E20'] < row['E50'] else 3
+
+        elif state == 3:
+            # Base 2 pullback: accept fresh cross OR EMA20 already below EMA50
+            if row['E20'] < row['E50']:
+                state = 4
+
+        elif state == 4:
+            # Base 2 re-entry: EMA9 crosses above EMA20; EMA50 must be above SMA200
+            if row['E9'] > row['E20'] and row['pE9'] <= row['pE20'] and row['E50'] > row['S200']:
+                bases_found.append(dt)
+                break
 
     if not bases_found:
         return None
@@ -101,7 +118,7 @@ def find_bases(df):
     return (bases_found[0], bases_found[1] if len(bases_found) > 1 else None)
 
 
-def run_first_daily_base_scan():
+def run_first_daily_base_scan(lookback_days=30):
     conn = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
 
@@ -138,11 +155,11 @@ def run_first_daily_base_scan():
         cursor.execute(f"ALTER TABLE first_daily_base DROP COLUMN IF EXISTS {col}")
     conn.commit()
 
-    log_progress(cursor, conn, "🚀 1st Daily Base Scan Started")
+    log_progress(cursor, conn, f"🚀 1st Daily Base Scan Started (lookback={lookback_days} days)")
 
     fyers = get_fyers()
     today_ist = datetime.now(IST).date()
-    cutoff_date = (today_ist - timedelta(days=30)).strftime('%Y-%m-%d')
+    cutoff_date = (today_ist - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
 
     cursor.execute("""
         SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score
@@ -257,4 +274,7 @@ def run_first_daily_base_scan():
 
 
 if __name__ == "__main__":
-    run_first_daily_base_scan()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--lookback-days', type=int, default=30)
+    args = parser.parse_args()
+    run_first_daily_base_scan(lookback_days=args.lookback_days)

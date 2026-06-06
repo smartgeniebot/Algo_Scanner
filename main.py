@@ -661,11 +661,7 @@ async def fyers_watchlist_done(body: dict):
 
 
 @app.get("/api/first-daily-base")
-async def get_first_daily_base():
-    """
-    Returns all stocks in the first_daily_base table.
-    The scan script already filters to signal_date within last 14 days.
-    """
+async def get_first_daily_base(lookback_days: int = 30):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -681,13 +677,17 @@ async def get_first_daily_base():
             conn.close()
             return {"status": "success", "data": []}
 
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
+
         cursor.execute("""
             SELECT fyers_symbol, stock_name, sector, industry, basic_industry,
                    rs_score, first_base_date, second_base_date
             FROM first_daily_base
+            WHERE GREATEST(first_base_date, COALESCE(second_base_date, first_base_date)) >= %s
             ORDER BY GREATEST(first_base_date, COALESCE(second_base_date, first_base_date)) DESC,
                      rs_score DESC NULLS LAST
-        """)
+        """, (cutoff,))
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -696,8 +696,11 @@ async def get_first_daily_base():
         return {"status": "error", "message": str(e), "data": []}
 
 
+class FirstDailyBaseRequest(BaseModel):
+    lookback_days: int = 30
+
 @app.post("/api/trigger-first-daily-base")
-async def trigger_first_daily_base():
+async def trigger_first_daily_base(body: FirstDailyBaseRequest = FirstDailyBaseRequest()):
     token = os.environ.get("GITHUB_TOKEN")
     repo  = os.environ.get("GITHUB_REPO")
 
@@ -708,7 +711,7 @@ async def trigger_first_daily_base():
 
     response = requests.post(
         f"https://api.github.com/repos/{repo}/actions/workflows/first_daily_base_engine.yml/dispatches",
-        headers=_gh_headers(), json={"ref": "main"}
+        headers=_gh_headers(), json={"ref": "main", "inputs": {"lookback_days": str(body.lookback_days)}}
     )
     if response.status_code == 204:
         return {"status": "success", "message": "1st Daily Base scan initiated"}

@@ -41,6 +41,9 @@ function App() {
 
   const [fdbTriggerStatus, setFdbTriggerStatus] = useState('idle');
   const [fdbTriggerLog, setFdbTriggerLog] = useState([]);
+  const [fdbLookbackDays, setFdbLookbackDays] = useState(() => {
+    return parseInt(localStorage.getItem('fdbLookbackDays') || '30', 10);
+  });
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
       .then(res => res.json())
@@ -51,11 +54,11 @@ function App() {
   useEffect(() => {
     if (activeView !== 'firstdailybase') return;
     setFdbLoading(true);
-    fetch('https://algo-scanner-lnck.onrender.com/api/first-daily-base')
+    fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base?lookback_days=${fdbLookbackDays}`)
       .then(r => r.json())
       .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
       .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
-  }, [activeView]);
+  }, [activeView, fdbLookbackDays]);
 
   const doScan = (micros, fundamentals) => {
     setLoading(true);
@@ -293,7 +296,11 @@ function App() {
 
     log('🏛️ Triggering 1st Daily Base Scan via GitHub Actions...');
     try {
-      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-first-daily-base', { method: 'POST' });
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-first-daily-base', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lookback_days: fdbLookbackDays })
+      });
       const d = await r.json();
       if (d.status !== 'success') { log(`❌ ${d.message || 'Unknown error — endpoint may not be deployed yet'}`); setFdbTriggerStatus('error'); return; }
     } catch (e) { log(`❌ Network error: ${e.message} — deploy the latest backend to Render first`); setFdbTriggerStatus('error'); return; }
@@ -731,7 +738,7 @@ function App() {
           formatDT={formatDT}
           onRefresh={() => {
             setFdbLoading(true);
-            fetch('https://algo-scanner-lnck.onrender.com/api/first-daily-base')
+            fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base?lookback_days=${fdbLookbackDays}`)
               .then(r => r.json())
               .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
               .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
@@ -862,8 +869,24 @@ function App() {
               <div>
                 <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>1st Daily Base Scan</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Triggers the <strong>first_daily_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 3-step sequence: <strong>EMA50 crosses above SMA200</strong> → <strong>EMA20 crosses below EMA50</strong> → <strong>EMA9 crosses above EMA20</strong>. Only stocks where the final signal occurred within the <strong>last 14 days</strong> are shown in the 1st Daily Base tab. Runs automatically at 01:30 AM IST daily — use this to trigger it manually.
+                  Triggers the <strong>first_daily_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 3-step sequence: <strong>EMA50 crosses above SMA200</strong> → <strong>EMA20 crosses below EMA50</strong> → <strong>EMA9 crosses above EMA20</strong>. Only stocks where the final signal occurred within the lookback window are shown in the 1st Daily Base tab. Runs automatically at 02:00 AM IST daily — use this to trigger it manually.
                 </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <label style={{ fontSize: '13px', fontWeight: '600', color: t.textMain }}>Lookback Days</label>
+                <input
+                  type="number"
+                  min="7"
+                  max="365"
+                  value={fdbLookbackDays}
+                  onChange={e => {
+                    const val = Math.max(7, Math.min(365, parseInt(e.target.value) || 30));
+                    setFdbLookbackDays(val);
+                    localStorage.setItem('fdbLookbackDays', val);
+                  }}
+                  style={{ width: '80px', padding: '6px 10px', borderRadius: '6px', border: `1px solid ${t.border}`, backgroundColor: t.inputBg, color: t.textMain, fontSize: '13px', fontWeight: '700', textAlign: 'center' }}
+                />
+                <span style={{ fontSize: '12px', color: t.textMuted }}>Only signals within this many days show in the 1st Daily Base tab</span>
               </div>
               <button
                 onClick={handleTriggerFirstDailyBase}

@@ -5,6 +5,11 @@ on:
     # Runs at 20:30 UTC (02:00 AM IST next day) — job 3 of 3, 4 hrs after sector_rs_engine (10:00 PM IST)
     - cron: '30 20 * * *'
   workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: 'Lookback window in days for base signal cutoff'
+        required: false
+        default: '30'
 
 jobs:
   run-scanner:
@@ -35,4 +40,4 @@ jobs:
       - name: 🔍 Step 2 - 1st Daily Base Scan
         env:
           NEON_URL: ${{ secrets.NEON_URL }}
-        run: python triple_ema_scan.py
+        run: python triple_ema_scan.py --lookback-days ${{ github.event.inputs.lookback_days || '30' }}
