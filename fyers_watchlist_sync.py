@@ -44,7 +44,9 @@ def _today_str() -> str:
 def _is_logged_in(page) -> bool:
     try:
         from urllib.parse import urlparse
-        return urlparse(page.url).netloc == "trade.fyers.in"
+        netloc = urlparse(page.url).netloc
+        # Accept both the main domain and any sub-path after login redirect
+        return "trade.fyers.in" in netloc
     except Exception:
         return False
 
@@ -113,6 +115,23 @@ def _find_el_any_frame(page, selectors: list):
     return None, None
 
 
+def _wait_for_watchlist_button(page, timeout=60) -> bool:
+    """Poll all frames until the watchlist button is present in the DOM."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for f in page.frames:
+            try:
+                found = f.evaluate("""
+                    () => !!document.querySelector('button[data-name="watchlists-button"]')
+                """)
+                if found:
+                    return True
+            except Exception:
+                pass
+        time.sleep(1)
+    return False
+
+
 def _open_dropdown_any_tab(frame) -> bool:
     result = frame.evaluate("""
         () => {
@@ -148,13 +167,35 @@ def _confirm_dialog(page) -> bool:
 
 def _do_import(page, frame, file_path: Path) -> bool:
     if not _open_dropdown_any_tab(frame):
+        log.warning("Could not open watchlist dropdown")
         return False
-    _, el = _find_el_any_frame(page, ['text=Import list', 'text=Import List'])
+    time.sleep(1.0)
+    # Try multiple label variants Fyers has used across versions
+    _, el = _find_el_any_frame(page, [
+        'text=Import list',
+        'text=Import List',
+        'text=Import watchlist',
+        'text=Import Watchlist',
+        '[data-name="import-list"]',
+        '[title="Import list"]',
+    ])
     if not el:
+        # Dump what's visible in the dropdown for debugging
+        for f in page.frames:
+            try:
+                items = f.evaluate("""
+                    () => [...document.querySelectorAll('div[data-role="menuitem"]')]
+                          .map(e => e.textContent.trim())
+                """)
+                if items:
+                    log.warning("Dropdown items found: %s", items)
+                    break
+            except Exception:
+                pass
         log.warning("'Import list' not found in dropdown")
         return False
     try:
-        with page.expect_file_chooser(timeout=5000) as fc:
+        with page.expect_file_chooser(timeout=8000) as fc:
             el.click()
         fc.value.set_files(str(file_path))
         log.info("File set: %s (%d symbols)", file_path.name,
@@ -341,7 +382,8 @@ def sync_watchlists(symbols: list[str]):
             deadline = time.time() + 600
             logged_in = False
             while time.time() < deadline:
-                for pg in ctx.pages:
+                # Check all open tabs — Fyers sometimes opens a new tab after login
+                for pg in list(ctx.pages):
                     try:
                         if _is_logged_in(pg):
                             page = pg
@@ -351,20 +393,33 @@ def sync_watchlists(symbols: list[str]):
                         pass
                 if logged_in:
                     break
-                time.sleep(2)
+                time.sleep(1)
 
             if not logged_in:
                 log.error("Login wait timed out. Exiting.")
-                page.screenshot(path=str(SNAPSHOT_DIR / "login_timeout.png"))
+                try:
+                    page.screenshot(path=str(SNAPSHOT_DIR / "login_timeout.png"))
+                except Exception:
+                    pass
                 ctx.close()
                 return
 
-        log.info("Logged in — starting import of %d watchlist(s).", len(watchlists))
+        log.info("Logged in — waiting for trading platform to fully load...")
         try:
-            page.wait_for_load_state("networkidle", timeout=20000)
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
         except Exception:
             pass
-        time.sleep(4)
+
+        # Wait until the watchlist button actually appears in the SPA — up to 90 seconds.
+        # This is the reliable signal that the UI is ready, replacing a fixed sleep.
+        log.info("Waiting for watchlist UI to be ready...")
+        if not _wait_for_watchlist_button(page, timeout=90):
+            log.warning("Watchlist button not found after 90s — attempting import anyway.")
+        else:
+            log.info("Watchlist UI ready.")
+            time.sleep(1)  # brief settle after button appears
+
+        log.info("Starting import of %d watchlist(s).", len(watchlists))
 
         # ── Import all chunks ─────────────────────────────────────────────────
         imported_names = set()
