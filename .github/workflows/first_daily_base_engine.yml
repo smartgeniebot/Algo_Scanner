@@ -2,8 +2,8 @@ name: Chart Hawks 1st Daily Base Engine
 
 on:
   schedule:
-    # Runs at 20:00 UTC (01:30 AM IST daily) — after market_engine completes
-    - cron: '0 20 * * *'
+    # Runs at 20:30 UTC (02:00 AM IST next day) — job 3 of 3, 4 hrs after sector_rs_engine (10:00 PM IST)
+    - cron: '30 20 * * *'
   workflow_dispatch:
 
 jobs:

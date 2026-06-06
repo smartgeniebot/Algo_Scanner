@@ -1,9 +1,9 @@
 name: Chart Hawks RS Ratio Snapshot
 
 on:
-  # Runs at 20:30 UTC (02:00 AM IST) — after market_engine finishes at ~01:00 AM IST
+  # Runs at 16:30 UTC (10:00 PM IST) — job 2 of 3, 4 hrs after market_engine (06:00 PM IST)
   schedule:
-    - cron: '30 20 * * 1-5'   # Mon–Fri only (trading days)
+    - cron: '30 16 * * 1-5'   # Mon–Fri only (trading days)
   workflow_dispatch:           # Manual trigger with optional backfill input
     inputs:
       backfill:

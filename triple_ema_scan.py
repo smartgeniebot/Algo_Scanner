@@ -217,15 +217,27 @@ def run_first_daily_base_scan():
                 f"🎯 {symbol} → 1st Base: {first_base} | 2nd Base: {second_base or '--'}")
 
         except Exception as e:
-            log_progress(cursor, conn, f"❌ Error on {symbol}: {e}")
             failed.append(symbol)
             try:
                 conn.rollback()
             except Exception:
                 pass
+            try:
+                log_progress(cursor, conn, f"❌ Error on {symbol}: {e}")
+            except Exception:
+                pass
 
         finally:
             time.sleep(0.1)
+
+    # Always close the loop cursor and open a fresh one for the final write,
+    # so a mid-loop DB error / rollback cannot leave us with a closed cursor here.
+    try:
+        cursor.close()
+    except Exception:
+        pass
+    conn = psycopg2.connect(NEON_URL)
+    cursor = conn.cursor()
 
     cursor.execute("DELETE FROM first_daily_base")
     if signals:
