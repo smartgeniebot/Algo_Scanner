@@ -34,9 +34,10 @@ function App() {
   const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle');
   const [refreshLog, setRefreshLog] = useState([]);
 
+  const [scannerSubTab, setScannerSubTab] = useState('all');
+
   const [firstDailyBase, setFirstDailyBase] = useState([]);
   const [fdbLoading, setFdbLoading] = useState(false);
-  const [fdbSearch, setFdbSearch] = useState('');
   const [fdbSort, setFdbSort] = useState({ key: 'first_base_date', direction: 'desc' });
 
   const [fdbTriggerStatus, setFdbTriggerStatus] = useState('idle');
@@ -44,21 +45,13 @@ function App() {
   const [fdbLookbackDays, setFdbLookbackDays] = useState(() => {
     return parseInt(localStorage.getItem('fdbLookbackDays') || '30', 10);
   });
+
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
       .then(res => res.json())
       .then(res => setHierarchy(res.data || {}))
       .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
   }, []);
-
-  useEffect(() => {
-    if (activeView !== 'firstdailybase') return;
-    setFdbLoading(true);
-    fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base?lookback_days=${fdbLookbackDays}`)
-      .then(r => r.json())
-      .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
-      .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
-  }, [activeView, fdbLookbackDays]);
 
   const doScan = (micros, fundamentals) => {
     setLoading(true);
@@ -69,6 +62,13 @@ function App() {
     }).then(r => r.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
+
+    // Also refresh Early Daily Bases filtered by current micros
+    setFdbLoading(true);
+    fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base?lookback_days=${fdbLookbackDays}`)
+      .then(r => r.json())
+      .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
+      .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
   };
 
   const handleScan = () => {
@@ -347,15 +347,29 @@ function App() {
   };
 
   const handleExportCSV = () => {
-    if (sortedStocks.length === 0) return;
+    if (activeTabStocks.length === 0) return;
 
-    const headers = ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "Daily Cross Date", "1H Pullback Time", "15M Pullback Time"];
-    
-    const csvRows = sortedStocks.map(stock => {
+    const isEarly = scannerSubTab === 'early';
+    const headers = isEarly
+      ? ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "1st Base Date", "2nd Base Date"]
+      : ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "Daily Cross Date", "1H Pullback Time", "15M Pullback Time"];
+
+    const csvRows = activeTabStocks.map(stock => {
       const cleanSymbol = stock.fyers_symbol ? stock.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '--';
       const mappedSector = Object.keys(hierarchy).find(sector =>
         Object.keys(hierarchy[sector] || {}).includes(stock.industry)
       ) || '--';
+      if (isEarly) {
+        return [
+          cleanSymbol,
+          `"${stock.sector || mappedSector}"`,
+          `"${stock.industry || '--'}"`,
+          `"${stock.basic_industry || '--'}"`,
+          stock.rs_score !== null ? stock.rs_score : '--',
+          stock.first_base_date || '--',
+          stock.second_base_date || '--'
+        ].join(',');
+      }
       return [
         cleanSymbol,
         `"${mappedSector}"`,
@@ -373,7 +387,7 @@ function App() {
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `ChartHawks_Scan_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`);
+    link.setAttribute('download', `ChartHawks_${isEarly ? 'EarlyBases' : 'Scan'}_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -381,8 +395,8 @@ function App() {
   };
 
   const handleFyersWatchlist = async () => {
-    if (sortedStocks.length === 0) return;
-    const symbols = sortedStocks.map(s => s.fyers_symbol).filter(Boolean);
+    if (activeTabStocks.length === 0) return;
+    const symbols = activeTabStocks.map(s => s.fyers_symbol).filter(Boolean);
     setFyersWlStatus('loading');
 
     let jobId = null;
@@ -472,6 +486,43 @@ function App() {
   }, [filteredStocks, sortConfig]);
 
   const toggleSort = (key) => setSortConfig({ key, direction: sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc' });
+  const toggleFdbSort = (key) => setFdbSort({ key, direction: fdbSort.key === key && fdbSort.direction === 'desc' ? 'asc' : 'desc' });
+
+  // Early Daily Bases: filter by selectedMicros + searchTerm + sort
+  const filteredFdb = useMemo(() => {
+    let items = firstDailyBase;
+    if (selectedMicros.size > 0) {
+      items = items.filter(s => selectedMicros.has(s.basic_industry));
+    }
+    if (searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      items = items.filter(s => Object.values(s).some(v => String(v || '').toLowerCase().includes(lowerSearch)));
+    }
+    return items;
+  }, [firstDailyBase, selectedMicros, searchTerm]);
+
+  const sortedFdb = useMemo(() => {
+    const items = [...filteredFdb];
+    if (!fdbSort.key) return items;
+    const dateKeys = ['first_base_date', 'second_base_date'];
+    items.sort((a, b) => {
+      let va = a[fdbSort.key], vb = b[fdbSort.key];
+      if (dateKeys.includes(fdbSort.key)) {
+        va = va ? new Date(va).getTime() : (fdbSort.direction === 'asc' ? Infinity : -Infinity);
+        vb = vb ? new Date(vb).getTime() : (fdbSort.direction === 'asc' ? Infinity : -Infinity);
+      } else {
+        va = va ?? (fdbSort.direction === 'asc' ? Infinity : -Infinity);
+        vb = vb ?? (fdbSort.direction === 'asc' ? Infinity : -Infinity);
+      }
+      if (va < vb) return fdbSort.direction === 'asc' ? -1 : 1;
+      if (va > vb) return fdbSort.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return items;
+  }, [filteredFdb, fdbSort]);
+
+  // Active sub-tab data for Export / Watchlist
+  const activeTabStocks = scannerSubTab === 'all' ? sortedStocks : sortedFdb;
 
   const themes = {
     light: {  
@@ -511,7 +562,6 @@ function App() {
             <button onClick={() => setActiveView('micro')} style={{...tabStyle, backgroundColor: activeView === 'micro' ? t.bgPanel : 'transparent', color: activeView === 'micro' ? t.textMain : t.textMuted}}>🔬 Micro Industries</button>
             <button onClick={() => setActiveView('directory')} style={{...tabStyle, backgroundColor: activeView === 'directory' ? t.bgPanel : 'transparent', color: activeView === 'directory' ? t.textMain : t.textMuted}}>📋 Stocks Directory</button>
             <button onClick={() => setActiveView('rsratio')} style={{...tabStyle, backgroundColor: activeView === 'rsratio' ? t.bgPanel : 'transparent', color: activeView === 'rsratio' ? t.textMain : t.textMuted}}>📐 RS Ratio</button>
-            <button onClick={() => setActiveView('firstdailybase')} style={{...tabStyle, backgroundColor: activeView === 'firstdailybase' ? t.bgPanel : 'transparent', color: activeView === 'firstdailybase' ? t.textMain : t.textMuted}}>🏛️ 1st Daily Base</button>
             <button onClick={() => setActiveView('settings')} style={{...tabStyle, backgroundColor: activeView === 'settings' ? t.bgPanel : 'transparent', color: activeView === 'settings' ? t.textMain : t.textMuted}}>⚙️ Settings</button>
           </div>
         </div>
@@ -601,13 +651,14 @@ function App() {
           </div>
 
           <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: t.bgPanel, margin: '15px', borderRadius: '10px', border: `1px solid ${t.border}` }}>
-            <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.border}`, backgroundColor: t.bgApp }}>
-              <div style={{ fontWeight: '700', fontSize: '16px', display: 'flex', alignItems: 'center', gap: '15px' }}>
-                <div>Scan Results ({sortedStocks.length})</div>
-                {sortedStocks.length > 0 && (
+
+            {/* Row 1: Export / Watchlist + Search */}
+            <div style={{ padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.border}`, backgroundColor: t.bgApp, flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {activeTabStocks.length > 0 && (
                   <button onClick={handleExportCSV} style={{ padding: '4px 12px', backgroundColor: '#10b981', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>📥 Export CSV</button>
                 )}
-                {sortedStocks.length > 0 && (
+                {activeTabStocks.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px' }}>
                     <button
                       onClick={handleFyersWatchlist}
@@ -631,83 +682,113 @@ function App() {
               <input id="results-search" name="results-search" type="text" autoComplete="off" placeholder="🔍 Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '300px', backgroundColor: t.inputBg, color: t.textMain }} />
             </div>
 
+            {/* Row 2: Sub-tabs */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 20px', borderBottom: `1px solid ${t.border}`, backgroundColor: t.bgPanel, flexShrink: 0 }}>
+              <button onClick={() => setScannerSubTab('all')} style={{ ...tabStyle, backgroundColor: scannerSubTab === 'all' ? t.btnPrimaryBg : t.bgApp, color: scannerSubTab === 'all' ? '#fff' : t.textMuted }}>
+                📊 All Daily Bases{sortedStocks.length > 0 ? ` (${sortedStocks.length})` : ''}
+              </button>
+              <button onClick={() => setScannerSubTab('early')} style={{ ...tabStyle, backgroundColor: scannerSubTab === 'early' ? t.btnPrimaryBg : t.bgApp, color: scannerSubTab === 'early' ? '#fff' : t.textMuted }}>
+                🏛️ Early Daily Bases{sortedFdb.length > 0 ? ` (${sortedFdb.length})` : ''}
+              </button>
+            </div>
+
+            {/* Results area */}
             <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-              
-              <div style={{ display: 'flex', flexDirection: 'column', flex: activeChart ? '0 0 50%' : '1 1 100%', overflow: 'hidden', transition: 'flex 0.3s ease' }}>
-                <div style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '14px', color: t.textMuted, backgroundColor: t.bgPanel, position: 'sticky', top: 0, zIndex: 10 }}>
-                  <div onClick={() => toggleSort('fyers_symbol')} style={headerSortStyle}>Ticker ⇅</div>
-                  <div onClick={() => toggleSort('rs_score')} style={headerSortStyle}>RS Score ⇅</div>
-                  <div onClick={() => toggleSort('daily_cross_date')} style={headerSortStyle}>Daily Cross ⇅</div>
-                  <div onClick={() => toggleSort('first_15m_cross_time')} style={headerSortStyle}>15m Pullback ⇅</div>
-                  <div onClick={() => toggleSort('first_1h_cross_time')} style={headerSortStyle}>1H Pullback ⇅</div>
-                  <div onClick={() => toggleSort('industry')} style={headerSortStyle}>Industry & Sector ⇅</div>
-                </div>
 
-                <div style={{ flex: 1, overflowY: 'auto' }}>
-                  {loading ? <div style={{textAlign:'center', padding:'60px'}}>Scanning...</div> : 
-                    sortedStocks.map((s, idx) => {
-                      const mappedSector = Object.keys(hierarchy).find(sector => Object.keys(hierarchy[sector] || {}).includes(s.industry)) || '--';
+              {scannerSubTab === 'all' ? (
+                <>
+                  <div style={{ display: 'flex', flexDirection: 'column', flex: activeChart ? '0 0 50%' : '1 1 100%', overflow: 'hidden', transition: 'flex 0.3s ease' }}>
+                    <div style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '14px', color: t.textMuted, backgroundColor: t.bgPanel, position: 'sticky', top: 0, zIndex: 10 }}>
+                      <div onClick={() => toggleSort('fyers_symbol')} style={headerSortStyle}>Ticker ⇅</div>
+                      <div onClick={() => toggleSort('rs_score')} style={headerSortStyle}>RS Score ⇅</div>
+                      <div onClick={() => toggleSort('daily_cross_date')} style={headerSortStyle}>Daily Cross ⇅</div>
+                      <div onClick={() => toggleSort('first_15m_cross_time')} style={headerSortStyle}>15m Pullback ⇅</div>
+                      <div onClick={() => toggleSort('first_1h_cross_time')} style={headerSortStyle}>1H Pullback ⇅</div>
+                      <div onClick={() => toggleSort('industry')} style={headerSortStyle}>Industry & Sector ⇅</div>
+                    </div>
+                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                      {loading ? <div style={{textAlign:'center', padding:'60px'}}>Scanning...</div> :
+                        sortedStocks.map((s, idx) => {
+                          const mappedSector = Object.keys(hierarchy).find(sector => Object.keys(hierarchy[sector] || {}).includes(s.industry)) || '--';
+                          const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
+                          const bseSymbol = `BSE:${cleanTicker}`;
+                          const isRowActive = activeChart === bseSymbol;
+                          return (
+                            <div key={idx} onClick={() => { if(cleanTicker) setActiveChart(bseSymbol); }}
+                              style={{ ...gridRowStyle, padding: '16px 0', borderBottom: `1px solid ${t.border}`, fontSize: '14px', cursor: 'pointer', backgroundColor: isRowActive ? (theme === 'dark' ? '#1e293b' : '#f1f5f9') : 'transparent', transition: 'background-color 0.15s ease' }}
+                              onMouseEnter={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = t.hover }}
+                              onMouseLeave={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = 'transparent' }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                                <div style={{fontWeight:'800', color: isRowActive ? '#3b82f6' : t.textTicker}}>{cleanTicker || '--'}</div>
+                              </div>
+                              <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? "--"}</div>
+                              <div style={{ color: t.textTicker, fontWeight: '700' }}>{formatDT(s.daily_cross_date)}</div>
+                              <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m}/>{formatDT(s.first_15m_cross_time)}</> : "--"}</div>
+                              <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h}/>{formatDT(s.first_1h_cross_time)}</> : "--"}</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
+                                <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
+                                <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>
+                                <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mappedSector}</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                  {activeChart && (
+                    <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
+                      <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
+                        <div style={{ fontWeight: '800', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>📊 {activeChart.replace('BSE:', '')}</div>
+                        <button onClick={() => setActiveChart(null)} style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>Close Split View ✖</button>
+                      </div>
+                      <div style={{ flex: 1, position: 'relative' }}>
+                        <TVChart key={activeChart + theme} symbol={activeChart} theme={theme} />
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* Early Daily Bases sub-tab */
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center', padding: '14px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '13px', color: t.textMuted, backgroundColor: t.bgPanel, flexShrink: 0 }}>
+                    <div onClick={() => toggleFdbSort('fyers_symbol')} style={headerSortStyle}>Ticker ⇅</div>
+                    <div onClick={() => toggleFdbSort('rs_score')} style={headerSortStyle}>RS Score ⇅</div>
+                    <div onClick={() => toggleFdbSort('first_base_date')} style={headerSortStyle}>1st Base Date ⇅</div>
+                    <div onClick={() => toggleFdbSort('second_base_date')} style={headerSortStyle}>2nd Base Date ⇅</div>
+                    <div onClick={() => toggleFdbSort('industry')} style={headerSortStyle}>Industry &amp; Sector ⇅</div>
+                  </div>
+                  <div style={{ flex: 1, overflowY: 'auto' }}>
+                    {fdbLoading ? (
+                      <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>Scanning...</div>
+                    ) : sortedFdb.length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>
+                        {firstDailyBase.length === 0 ? 'No signals found. Select filters and click Scan, or run the scan from Settings.' : 'No results match your filters.'}
+                      </div>
+                    ) : sortedFdb.map((s, idx) => {
                       const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
-                      const bseSymbol = `BSE:${cleanTicker}`;
-                      const isRowActive = activeChart === bseSymbol;
-
+                      const has2nd = !!s.second_base_date;
                       return (
-                        <div 
-                          key={idx} 
-                          onClick={() => { if(cleanTicker) setActiveChart(bseSymbol); }}
-                          style={{ 
-                            ...gridRowStyle, 
-                            padding: '16px 0', 
-                            borderBottom: `1px solid ${t.border}`, 
-                            fontSize: '14px',
-                            cursor: 'pointer',
-                            backgroundColor: isRowActive ? (theme === 'dark' ? '#1e293b' : '#f1f5f9') : 'transparent',
-                            transition: 'background-color 0.15s ease'
-                          }}
-                          onMouseEnter={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = t.hover }}
-                          onMouseLeave={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = 'transparent' }}
+                        <div key={idx}
+                          style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center', padding: '14px 0', borderBottom: `1px solid ${t.border}`, fontSize: '13px', transition: 'background-color 0.15s' }}
+                          onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
+                          onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                            <div style={{fontWeight:'800', color: isRowActive ? '#3b82f6' : t.textTicker}}>{cleanTicker || '--'}</div>
-                          </div>
-
-                          <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? "--"}</div>
-                          
-                          <div style={{ color: t.textTicker, fontWeight: '700' }}>{formatDT(s.daily_cross_date)}</div>
-                          <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_15m_cross_time ? <><PullbackIcon color={t.icon15m}/>{formatDT(s.first_15m_cross_time)}</> : "--"}</div>
-                          <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', color: t.textTicker, fontWeight: '700' }}>{s.first_1h_cross_time ? <><PullbackIcon color={t.icon1h}/>{formatDT(s.first_1h_cross_time)}</> : "--"}</div>
-                          
+                          <div style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</div>
+                          <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '3px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? '--'}</div>
+                          <div style={{ fontWeight: '700', color: '#10b981' }}>{formatDT(s.first_base_date)}</div>
+                          <div style={{ fontWeight: has2nd ? '800' : '400', color: has2nd ? '#f59e0b' : t.textMuted }}>{has2nd ? formatDT(s.second_base_date) : '--'}</div>
                           <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
                             <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
                             <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>
-                            <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mappedSector}</div>
+                            <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.sector}</div>
                           </div>
-
                         </div>
                       );
                     })}
-                </div>
-              </div>
-
-              {activeChart && (
-                <div style={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', borderTop: `3px solid ${t.border}`, backgroundColor: t.bgPanel }}>
-                  <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: t.bgApp, borderBottom: `1px solid ${t.border}` }}>
-                    <div style={{ fontWeight: '800', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                      📊 {activeChart.replace('BSE:', '')}
-                    </div>
-                    <button
-                      onClick={() => setActiveChart(null)}
-                      style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
-                    >
-                      Close Split View ✖
-                    </button>
-                  </div>
-                  <div style={{ flex: 1, position: 'relative' }}>
-                    <TVChart key={activeChart + theme} symbol={activeChart} theme={theme} />
                   </div>
                 </div>
               )}
-
             </div>
           </main>
         </div>
@@ -729,21 +810,6 @@ function App() {
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, position: 'relative' }}>
           <RSRatioReport theme={theme} onScanNavigate={triggerScanFromHeatmap} />
         </div>
-      ) : activeView === 'firstdailybase' ? (
-        <FirstDailyBaseView
-          t={t} theme={theme}
-          stocks={firstDailyBase} loading={fdbLoading}
-          search={fdbSearch} setSearch={setFdbSearch}
-          sort={fdbSort} setSort={setFdbSort}
-          formatDT={formatDT}
-          onRefresh={() => {
-            setFdbLoading(true);
-            fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base?lookback_days=${fdbLookbackDays}`)
-              .then(r => r.json())
-              .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
-              .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
-          }}
-        />
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.bgApp, padding: '40px' }}>
           <div style={{ maxWidth: '600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -1001,115 +1067,6 @@ function App() {
   );
 }
 
-function FirstDailyBaseView({ t, theme, stocks, loading, search, setSearch, sort, setSort, formatDT, onRefresh }) {
-  const fdbGridStyle = {
-    display: 'grid',
-    gridTemplateColumns: '1.2fr 0.8fr 1fr 1fr 1.8fr',
-    width: '100%',
-    alignItems: 'center',
-    textAlign: 'center',
-  };
-
-  const toggleSort = (key) => setSort({ key, direction: sort.key === key && sort.direction === 'desc' ? 'asc' : 'desc' });
-
-  const filtered = useMemo(() => {
-    const s = search.toLowerCase();
-    return s ? stocks.filter(r => Object.values(r).some(v => String(v || '').toLowerCase().includes(s))) : stocks;
-  }, [stocks, search]);
-
-  const sorted = useMemo(() => {
-    const items = [...filtered];
-    if (!sort.key) return items;
-    const dateKeys = ['first_base_date', 'second_base_date'];
-    items.sort((a, b) => {
-      let va = a[sort.key], vb = b[sort.key];
-      if (dateKeys.includes(sort.key)) {
-        va = va ? new Date(va).getTime() : (sort.direction === 'asc' ? Infinity : -Infinity);
-        vb = vb ? new Date(vb).getTime() : (sort.direction === 'asc' ? Infinity : -Infinity);
-      } else {
-        va = va ?? (sort.direction === 'asc' ? Infinity : -Infinity);
-        vb = vb ?? (sort.direction === 'asc' ? Infinity : -Infinity);
-      }
-      if (va < vb) return sort.direction === 'asc' ? -1 : 1;
-      if (va > vb) return sort.direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-    return items;
-  }, [filtered, sort]);
-
-  const hdrStyle = { cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' };
-
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: t.bgApp }}>
-      <div style={{ backgroundColor: t.bgPanel, margin: '15px', borderRadius: '10px', border: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
-
-        <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.border}`, backgroundColor: t.bgApp, flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{ fontWeight: '700', fontSize: '16px' }}>
-              1st Daily Base &nbsp;<span style={{ fontWeight: '400', fontSize: '13px', color: t.textMuted }}>EMA50 &gt; SMA200 → pullback → EMA9 re-entry (last 30 days)</span>
-            </div>
-            <span style={{ fontWeight: '700', fontSize: '13px', color: t.textMuted }}>({sorted.length})</span>
-            <button
-              onClick={onRefresh}
-              disabled={loading}
-              style={{ padding: '4px 12px', backgroundColor: t.btnPrimaryBg, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
-            >
-              {loading ? '⏳ Loading...' : '🔄 Refresh'}
-            </button>
-          </div>
-          <input
-            type="text" autoComplete="off" placeholder="🔍 Search..."
-            value={search} onChange={e => setSearch(e.target.value)}
-            style={{ padding: '8px 16px', borderRadius: '6px', border: `1px solid ${t.border}`, width: '280px', backgroundColor: t.inputBg, color: t.textMain, fontSize: '13px' }}
-          />
-        </div>
-
-        <div style={{ ...fdbGridStyle, padding: '14px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '13px', color: t.textMuted, backgroundColor: t.bgPanel, flexShrink: 0 }}>
-          <div onClick={() => toggleSort('fyers_symbol')} style={hdrStyle}>Ticker ⇅</div>
-          <div onClick={() => toggleSort('rs_score')} style={hdrStyle}>RS Score ⇅</div>
-          <div onClick={() => toggleSort('first_base_date')} style={hdrStyle}>1st Base Date ⇅</div>
-          <div onClick={() => toggleSort('second_base_date')} style={hdrStyle}>2nd Base Date ⇅</div>
-          <div onClick={() => toggleSort('industry')} style={hdrStyle}>Industry &amp; Sector ⇅</div>
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>Scanning...</div>
-          ) : sorted.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>
-              {stocks.length === 0 ? 'No signals in the last 30 days. Run the 1st Daily Base scan from Settings to populate results.' : 'No results match your search.'}
-            </div>
-          ) : sorted.map((s, idx) => {
-            const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
-            const has2nd = !!s.second_base_date;
-            return (
-              <div
-                key={idx}
-                style={{ ...fdbGridStyle, padding: '14px 0', borderBottom: `1px solid ${t.border}`, fontSize: '13px', transition: 'background-color 0.15s' }}
-                onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
-                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-              >
-                <div style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</div>
-                <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '3px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>
-                  {s.rs_score ?? '--'}
-                </div>
-                <div style={{ fontWeight: '700', color: '#10b981' }}>{formatDT(s.first_base_date)}</div>
-                <div style={{ fontWeight: has2nd ? '800' : '400', color: has2nd ? '#f59e0b' : t.textMuted }}>
-                  {has2nd ? formatDT(s.second_base_date) : '--'}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
-                  <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>
-                  <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.sector}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 const PullbackIcon = ({ color }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16C10 14.5 14 13 20 11.5" stroke={color} strokeWidth="3" strokeLinecap="round" /><path d="M4 8C10 10 14 16 20 20" stroke={color} strokeOpacity="0.4" strokeWidth="3" strokeLinecap="round" /></svg>
