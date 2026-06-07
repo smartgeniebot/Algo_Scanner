@@ -42,11 +42,22 @@ def _today_str() -> str:
     return _ist_now().strftime("%Y-%m-%d")
 
 def _is_logged_in(page) -> bool:
+    """
+    Return True once the user has passed the login screen.
+    Fyers may redirect to trade.fyers.in, fyers.in/charts, or similar —
+    so we accept any fyers.in page that is NOT the login page itself.
+    """
     try:
         from urllib.parse import urlparse
-        netloc = urlparse(page.url).netloc
-        # Accept both the main domain and any sub-path after login redirect
-        return "trade.fyers.in" in netloc
+        url = page.url or ""
+        netloc = urlparse(url).netloc
+        if "fyers.in" not in netloc:
+            return False
+        # Still on login/auth pages — not done yet
+        login_indicators = ("login", "auth", "signin", "sso", "myaccount")
+        if any(ind in url.lower() for ind in login_indicators):
+            return False
+        return True
     except Exception:
         return False
 
@@ -392,6 +403,7 @@ def sync_watchlists(symbols: list[str]):
                     except Exception:
                         pass
                 if logged_in:
+                    log.info("Login detected — URL: %s", page.url)
                     break
                 time.sleep(1)
 
@@ -409,6 +421,15 @@ def sync_watchlists(symbols: list[str]):
             page.wait_for_load_state("domcontentloaded", timeout=30000)
         except Exception:
             pass
+
+        # If login landed on a non-trade page (e.g. fyers.in/charts), navigate to trade
+        if "trade.fyers.in" not in page.url:
+            log.info("Landed on %s — navigating to trade.fyers.in for watchlist access...", page.url)
+            page.goto(FYERS_URL, timeout=30000)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=30000)
+            except Exception:
+                pass
 
         # Wait until the watchlist button actually appears in the SPA — up to 90 seconds.
         # This is the reliable signal that the UI is ready, replacing a fixed sleep.
