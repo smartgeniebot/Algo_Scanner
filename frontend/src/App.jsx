@@ -309,7 +309,7 @@ function App() {
     setFdbTriggerLog([]);
     const log = (msg) => setFdbTriggerLog(prev => [...prev, msg]);
 
-    log('🏛️ Triggering 1st Daily Base Scan via GitHub Actions...');
+    log('🏛️ Triggering Early Daily Bases Scan via GitHub Actions...');
     try {
       const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-first-daily-base', {
         method: 'POST',
@@ -1107,9 +1107,9 @@ function App() {
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>1st Daily Base Scan</div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Early Daily Bases Scan</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Triggers the <strong>first_daily_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 3-step sequence: <strong>EMA50 crosses above SMA200</strong> → <strong>EMA20 crosses below EMA50</strong> → <strong>EMA9 crosses above EMA20</strong>. Only stocks where the final signal occurred within the lookback window are shown in the 1st Daily Base tab. Runs automatically at 02:00 AM IST daily — use this to trigger it manually.
+                  Triggers the <strong>first_daily_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 3-step sequence: <strong>Daily EMA50 crosses above SMA200</strong> → <strong>EMA20 crosses below EMA50 (pullback)</strong> → <strong>EMA9 crosses above EMA20 (re-entry)</strong>. Only stocks where the signal occurred within the lookback window are shown in the Early Daily Bases tab. Runs automatically at 02:00 AM IST daily — use this to trigger it manually.
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1151,7 +1151,7 @@ function App() {
                   gap: '8px'
                 }}
               >
-                {fdbTriggerStatus === 'idle'    && '🏛️ Run 1st Daily Base Scan'}
+                {fdbTriggerStatus === 'idle'    && '🏛️ Run Early Daily Bases Scan'}
                 {fdbTriggerStatus === 'loading' && '⏳ Starting...'}
                 {fdbTriggerStatus === 'success' && '✅ Triggered!'}
                 {fdbTriggerStatus === 'error'   && '❌ Failed — Retry'}
