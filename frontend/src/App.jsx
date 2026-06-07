@@ -992,6 +992,25 @@ function App() {
             {/* Scanner Filters */}
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain }}>Scanner Filters</div>
+
+              {/* Lookback Days — common to all 3 tabs */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <label style={{ fontSize: '13px', fontWeight: '600', color: t.textMain, whiteSpace: 'nowrap' }}>Lookback Days</label>
+                <input
+                  type="number"
+                  min="7"
+                  max="365"
+                  value={lookbackDays}
+                  onChange={e => {
+                    const val = Math.max(7, Math.min(365, parseInt(e.target.value) || 30));
+                    setLookbackDays(val);
+                    localStorage.setItem('lookbackDays', val);
+                  }}
+                  style={{ width: '80px', padding: '6px 10px', borderRadius: '6px', border: `1px solid ${t.border}`, backgroundColor: t.inputBg, color: t.textMain, fontSize: '13px', fontWeight: '700', textAlign: 'center' }}
+                />
+                <span style={{ fontSize: '12px', color: t.textMuted }}>Filters all 3 Scanner tabs — only signals within this window are shown</span>
+              </div>
+
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', cursor: 'pointer' }}>
                 <div style={{ position: 'relative', flexShrink: 0, marginTop: '2px' }}>
                   <input
@@ -1015,9 +1034,9 @@ function App() {
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Fyers API - Full Data Fetch</div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>All Daily Bases Scan</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Triggers the <strong>market_engine</strong> workflow on GitHub Actions. Fetches 364 days of OHLCV data from Fyers API for every NSE stock, computes EMA20/EMA50 crossovers, calculates RS scores against Nifty 50, detects 1H and 15M intraday pullbacks, and updates the database. Runs automatically after market close — use this to trigger it manually if needed.
+                  Triggers the <strong>market_engine</strong> workflow on GitHub Actions. Fetches 364 days of OHLCV data from Fyers for every NSE stock, computes <strong>Daily EMA20/EMA50 crossovers</strong>, calculates RS scores against Nifty 50, detects <strong>1H and 15M intraday pullbacks</strong>, and updates the database. Results appear in the <strong>All Daily Bases</strong> tab. Runs automatically at <strong>6:00 PM IST</strong> daily — use this to trigger it manually.
                 </div>
               </div>
               <button
@@ -1043,7 +1062,7 @@ function App() {
                   gap: '8px'
                 }}
               >
-                {triggerStatus === 'idle'    && '🔄 Sync Market Data'}
+                {triggerStatus === 'idle'    && '🔄 Run All Daily Bases Scan'}
                 {triggerStatus === 'loading' && '⏳ Starting...'}
                 {triggerStatus === 'success' && '✅ Triggered!'}
                 {triggerStatus === 'error'   && '❌ Failed — Retry'}
@@ -1061,9 +1080,9 @@ function App() {
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Intraday H &amp; 15 mins Cross</div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Intraday 1H &amp; 15M Pullback</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Triggers the <strong>intraday_engine</strong> workflow on GitHub Actions. Scans only stocks with an active daily uptrend and detects the first EMA20/EMA50 bearish crossover on 1H and 15M timeframes — signalling a pullback entry opportunity. Runs automatically every hour during market hours — use this to trigger it manually if needed.
+                  Triggers the <strong>intraday_engine</strong> workflow on GitHub Actions. Scans stocks with an active daily uptrend and detects the <strong>first EMA20 cross below EMA50</strong> on <strong>1H and 15M</strong> timeframes — signalling an intraday pullback entry. Results appear in the <strong>All Daily Bases</strong> tab as pullback timestamps. Runs automatically <strong>every hour from 8:00 AM to 4:00 PM IST</strong> on weekdays — use this to trigger it manually.
                 </div>
               </div>
               <button
@@ -1109,24 +1128,8 @@ function App() {
               <div>
                 <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Early Daily Bases Scan</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Triggers the <strong>first_daily_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 3-step sequence: <strong>Daily EMA50 crosses above SMA200</strong> → <strong>EMA20 crosses below EMA50 (pullback)</strong> → <strong>EMA9 crosses above EMA20 (re-entry)</strong>. Only stocks where the signal occurred within the lookback window are shown in the Early Daily Bases tab. Runs automatically at 02:00 AM IST daily — use this to trigger it manually.
+                  Triggers the <strong>first_daily_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 3-step sequence: <strong>Daily EMA50 crosses above SMA200</strong> → <strong>EMA20 crosses below EMA50</strong> (1st pullback) → <strong>EMA9 crosses above EMA20</strong> (re-entry base). A 2nd base is also tracked if a fresh pullback follows. Results appear in the <strong>Early Daily Bases</strong> tab. Runs automatically at <strong>2:00 AM IST</strong> daily — use this to trigger it manually.
                 </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <label style={{ fontSize: '13px', fontWeight: '600', color: t.textMain }}>Lookback Days</label>
-                <input
-                  type="number"
-                  min="7"
-                  max="365"
-                  value={lookbackDays}
-                  onChange={e => {
-                    const val = Math.max(7, Math.min(365, parseInt(e.target.value) || 30));
-                    setLookbackDays(val);
-                    localStorage.setItem('lookbackDays', val);
-                  }}
-                  style={{ width: '80px', padding: '6px 10px', borderRadius: '6px', border: `1px solid ${t.border}`, backgroundColor: t.inputBg, color: t.textMain, fontSize: '13px', fontWeight: '700', textAlign: 'center' }}
-                />
-                <span style={{ fontSize: '12px', color: t.textMuted }}>Applies to all 3 Scanner tabs — filters stocks by signal date</span>
               </div>
               <button
                 onClick={handleTriggerFirstDailyBase}
@@ -1171,7 +1174,7 @@ function App() {
               <div>
                 <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Early Weekly Base Scan</div>
                 <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
-                  Triggers the <strong>early_weekly_base_engine</strong> workflow on GitHub Actions. Detects stocks where <strong>Daily EMA50 crossed above SMA200</strong> and then had a <strong>first pullback with candle Low below EMA40</strong>. Uses the shared Lookback Days window above. Runs automatically at 02:30 AM IST daily.
+                  Triggers the <strong>early_weekly_base_engine</strong> workflow on GitHub Actions. Scans all NSE stocks for the 2-step sequence: <strong>Daily EMA50 crosses above SMA200</strong> → <strong>first pullback candle where Low drops below EMA40</strong>. Results appear in the <strong>Early Weekly Bases</strong> tab. Runs automatically at <strong>4:00 AM IST</strong> daily — use this to trigger it manually.
                 </div>
               </div>
               <button
