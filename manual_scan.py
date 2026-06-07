@@ -197,7 +197,7 @@ def run_daily_scan():
 
     for stock_id, symbol, db_daily_active, db_daily_date in tqdm(stocks):
         try:
-            # Fyers hard limit is 366 days for 1D resolution → ~53 weekly candles after resample
+            # Main fetch: last 364 days — used for daily crossover, RS score, intraday pullbacks
             range_from = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
             range_to = today_ist.strftime("%Y-%m-%d")
 
@@ -248,59 +248,71 @@ def run_daily_scan():
             new_15m = None
             new_weekly_bullish = False
 
-            if len(df) >= 50:
-                # --- WEEKLY EMA (resampled from daily — zero extra API call) ---
-                df_dt = df.copy()
-                df_dt['dt'] = pd.to_datetime(df_dt['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
-                df_dt = df_dt.set_index('dt')
-                dfw = df_dt['close'].resample('W').last().dropna().reset_index(drop=True)
-                if len(dfw) >= 50:
-                    new_weekly_bullish = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
+            # --- WEEKLY EMA20 > EMA50 ---
+            # Needs ~100+ weekly bars for accurate EMAs — fetch a 2nd batch covering
+            # days 730-365 so combined with main fetch we get ~2 years of daily data (~104 weekly bars)
+            warmup_from = (today_ist - timedelta(days=730)).strftime("%Y-%m-%d")
+            warmup_to   = (today_ist - timedelta(days=365)).strftime("%Y-%m-%d")
+            res_w = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
+                                       "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
+            frames = []
+            if isinstance(res_w, dict) and "candles" in res_w and res_w["candles"]:
+                frames.append(pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol']))
+            frames.append(df)
+            df_combined = pd.concat(frames).drop_duplicates(subset='date').sort_values('date').reset_index(drop=True)
 
-                # --- DAILY EMA CROSSOVER ---
-                df['E20'] = ta.ema(df['close'], 20)
-                df['E50'] = ta.ema(df['close'], 50)
-                df['P20'] = df['E20'].shift(1)
-                df['P50'] = df['E50'].shift(1)
+            df_dt = df_combined.copy()
+            df_dt['dt'] = pd.to_datetime(df_dt['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
+            df_dt = df_dt.set_index('dt')
+            dfw = df_dt['close'].resample('W').last().dropna().reset_index(drop=True)
+            # Need at least 60 weekly bars so EMA50 has meaningful warmup
+            if len(dfw) >= 60:
+                new_weekly_bullish = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
 
-                if df['E20'].iloc[-1] > df['E50'].iloc[-1]:
-                    crosses = df[(df['E20'] > df['E50']) & (df['P20'] <= df['P50'])]
+            # --- DAILY EMA CROSSOVER ---
+            df['E20'] = ta.ema(df['close'], 20)
+            df['E50'] = ta.ema(df['close'], 50)
+            df['P20'] = df['E20'].shift(1)
+            df['P50'] = df['E50'].shift(1)
 
-                    if not crosses.empty:
-                        daily_cross_epoch = int(float(crosses['date'].iloc[-1]))
-                        last_dt = datetime.fromtimestamp(daily_cross_epoch, IST).date()
-                        days_active = (today_ist - last_dt).days
+            if df['E20'].iloc[-1] > df['E50'].iloc[-1]:
+                crosses = df[(df['E20'] > df['E50']) & (df['P20'] <= df['P50'])]
 
-                        if days_active <= LOOKBACK_DAYS:
-                            new_active = "Yes"
-                            new_date = last_dt.strftime('%Y-%m-%d')
+                if not crosses.empty:
+                    daily_cross_epoch = int(float(crosses['date'].iloc[-1]))
+                    last_dt = datetime.fromtimestamp(daily_cross_epoch, IST).date()
+                    days_active = (today_ist - last_dt).days
 
-                            fetch_days = min(days_active + 25, 95)
-                            from_dt_intra = (today_ist - timedelta(days=fetch_days)).strftime("%Y-%m-%d")
-                            to_dt_intra = today_ist.strftime("%Y-%m-%d")
+                    if days_active <= LOOKBACK_DAYS:
+                        new_active = "Yes"
+                        new_date = last_dt.strftime('%Y-%m-%d')
 
-                            # Always recalculate — never reuse cached DB values (stale data risk)
-                            res_60 = fetch_safe(fyers, {"symbol": symbol, "resolution": "60", "date_format": "1",
-                                                         "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
-                            if isinstance(res_60, dict) and "candles" in res_60 and len(res_60["candles"]) >= 50:
-                                df60 = pd.DataFrame(res_60['candles'], columns=['date','open','high','low','close','vol'])
-                                df60['E20'], df60['E50'] = ta.ema(df60['close'], 20), ta.ema(df60['close'], 50)
-                                df60['P20'], df60['P50'] = df60['E20'].shift(1), df60['E50'].shift(1)
-                                c_60 = df60[(df60['E20'] < df60['E50']) & (df60['P20'] >= df60['P50'])]
-                                c_60 = c_60[c_60['date'] >= daily_cross_epoch]
-                                if not c_60.empty:
-                                    new_1h = datetime.fromtimestamp(int(float(c_60['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
+                        fetch_days = min(days_active + 25, 95)
+                        from_dt_intra = (today_ist - timedelta(days=fetch_days)).strftime("%Y-%m-%d")
+                        to_dt_intra = today_ist.strftime("%Y-%m-%d")
 
-                            res_15 = fetch_safe(fyers, {"symbol": symbol, "resolution": "15", "date_format": "1",
-                                                         "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
-                            if isinstance(res_15, dict) and "candles" in res_15 and len(res_15["candles"]) >= 50:
-                                df15 = pd.DataFrame(res_15['candles'], columns=['date','open','high','low','close','vol'])
-                                df15['E20'], df15['E50'] = ta.ema(df15['close'], 20), ta.ema(df15['close'], 50)
-                                df15['P20'], df15['P50'] = df15['E20'].shift(1), df15['E50'].shift(1)
-                                c_15 = df15[(df15['E20'] < df15['E50']) & (df15['P20'] >= df15['P50'])]
-                                c_15 = c_15[c_15['date'] >= daily_cross_epoch]
-                                if not c_15.empty:
-                                    new_15m = datetime.fromtimestamp(int(float(c_15['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
+                        # Always recalculate — never reuse cached DB values (stale data risk)
+                        res_60 = fetch_safe(fyers, {"symbol": symbol, "resolution": "60", "date_format": "1",
+                                                     "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
+                        if isinstance(res_60, dict) and "candles" in res_60 and len(res_60["candles"]) >= 50:
+                            df60 = pd.DataFrame(res_60['candles'], columns=['date','open','high','low','close','vol'])
+                            df60['E20'], df60['E50'] = ta.ema(df60['close'], 20), ta.ema(df60['close'], 50)
+                            df60['P20'], df60['P50'] = df60['E20'].shift(1), df60['E50'].shift(1)
+                            c_60 = df60[(df60['E20'] < df60['E50']) & (df60['P20'] >= df60['P50'])]
+                            c_60 = c_60[c_60['date'] >= daily_cross_epoch]
+                            if not c_60.empty:
+                                new_1h = datetime.fromtimestamp(int(float(c_60['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
+
+                        res_15 = fetch_safe(fyers, {"symbol": symbol, "resolution": "15", "date_format": "1",
+                                                     "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
+                        if isinstance(res_15, dict) and "candles" in res_15 and len(res_15["candles"]) >= 50:
+                            df15 = pd.DataFrame(res_15['candles'], columns=['date','open','high','low','close','vol'])
+                            df15['E20'], df15['E50'] = ta.ema(df15['close'], 20), ta.ema(df15['close'], 50)
+                            df15['P20'], df15['P50'] = df15['E20'].shift(1), df15['E50'].shift(1)
+                            c_15 = df15[(df15['E20'] < df15['E50']) & (df15['P20'] >= df15['P50'])]
+                            c_15 = c_15[c_15['date'] >= daily_cross_epoch]
+                            if not c_15.empty:
+                                new_15m = datetime.fromtimestamp(int(float(c_15['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
 
             pending_updates.append((rs_val, new_active, new_date, new_1h, new_15m, new_weekly_bullish, stock_id))
             if len(pending_updates) >= BATCH_SIZE:
