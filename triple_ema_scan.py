@@ -98,12 +98,12 @@ def find_bases(df):
             # Base 1 re-entry: EMA9 crosses above EMA20; EMA50 must be above SMA200
             if row['E9'] > row['E20'] and row['pE9'] <= row['pE20'] and row['E50'] > row['S200']:
                 bases_found.append(dt)
-                # Move to state 3; if EMA20 already below EMA50, go straight to state 4
-                state = 4 if row['E20'] < row['E50'] else 3
+                # Always require a fresh EMA20 < EMA50 pullback before Base 2
+                state = 3
 
         elif state == 3:
-            # Base 2 pullback: accept fresh cross OR EMA20 already below EMA50
-            if row['E20'] < row['E50']:
+            # Base 2 pullback: require a fresh EMA20 crossover below EMA50
+            if row['E20'] < row['E50'] and row['pE20'] >= row['pE50']:
                 state = 4
 
         elif state == 4:
