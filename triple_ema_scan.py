@@ -12,10 +12,10 @@ from config import NEON_URL
 CLIENT_ID = "QTKF8KZDM9-100"
 IST = timezone(timedelta(hours=5, minutes=30))
 
-def log_progress(cursor, conn, msg):
+def log_progress(cursor, conn, msg, job='first_daily_base'):
     print(msg)
     try:
-        cursor.execute("INSERT INTO job_progress (job, line) VALUES (%s, %s)", ('first_daily_base', msg))
+        cursor.execute("INSERT INTO job_progress (job, line) VALUES (%s, %s)", (job, msg))
         conn.commit()
     except Exception:
         pass
@@ -276,8 +276,190 @@ def run_first_daily_base_scan(lookback_days=30):
     conn.close()
 
 
+def find_weekly_base(df):
+    """
+    State machine for Early Weekly Base detection on daily OHLCV data:
+      Cycle start : EMA50 crosses above SMA200 on daily
+      Base signal : price Low drops below EMA40 for the first time after cycle start
+    Returns the date string of the first pullback candle where Low < EMA40, or None.
+    """
+    if len(df) < 210:
+        return None
+
+    df = df.copy().reset_index(drop=True)
+    df['E40']  = ta.ema(df['close'], 40)
+    df['E50']  = ta.ema(df['close'], 50)
+    df['S200'] = ta.sma(df['close'], 200)
+    df['pE50']  = df['E50'].shift(1)
+    df['pS200'] = df['S200'].shift(1)
+    df = df.dropna(subset=['E40', 'E50', 'S200', 'pE50', 'pS200']).reset_index(drop=True)
+    if len(df) < 5:
+        return None
+
+    in_cycle = False
+    for i in range(len(df)):
+        row = df.iloc[i]
+        dt = datetime.fromtimestamp(int(float(row['date'])), IST).strftime('%Y-%m-%d')
+
+        # Reset if EMA50 drops back below SMA200
+        if in_cycle and row['E50'] < row['S200']:
+            in_cycle = False
+            continue
+
+        if not in_cycle:
+            if row['E50'] > row['S200'] and row['pE50'] <= row['pS200']:
+                in_cycle = True
+        else:
+            # First pullback: candle Low drops below EMA40
+            if row['low'] < row['E40']:
+                return dt
+
+    return None
+
+
+def run_early_weekly_base_scan(lookback_days=30):
+    conn = psycopg2.connect(NEON_URL)
+    cursor = conn.cursor()
+
+    JOB = 'early_weekly_base'
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS job_progress (
+            id SERIAL PRIMARY KEY, job TEXT NOT NULL,
+            line TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cursor.execute("DELETE FROM job_progress WHERE job = %s", (JOB,))
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS early_weekly_base (
+            id               SERIAL PRIMARY KEY,
+            fyers_symbol     TEXT UNIQUE NOT NULL,
+            stock_name       TEXT,
+            sector           TEXT,
+            industry         TEXT,
+            basic_industry   TEXT,
+            rs_score         FLOAT,
+            pullback_date    TEXT,
+            is_high_roce     BOOLEAN DEFAULT FALSE,
+            is_moderate_growth BOOLEAN DEFAULT FALSE,
+            updated_at       TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+
+    log_progress(cursor, conn, f"🌿 Early Weekly Base Scan Started (lookback={lookback_days} days)", JOB)
+
+    fyers = get_fyers()
+    today_ist = datetime.now(IST).date()
+    cutoff_date = (today_ist - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+
+    cursor.execute("""
+        SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
+               is_high_roce, is_moderate_growth
+        FROM stocks
+        WHERE fyers_symbol IS NOT NULL
+    """)
+    stocks = cursor.fetchall()
+    log_progress(cursor, conn, f"📊 Scanning {len(stocks)} stocks | cutoff={cutoff_date}...", JOB)
+
+    SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
+    signals = []
+    failed  = []
+
+    for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
+        try:
+            warmup_from = (today_ist - timedelta(days=730)).strftime("%Y-%m-%d")
+            warmup_to   = (today_ist - timedelta(days=365)).strftime("%Y-%m-%d")
+            main_from   = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
+            main_to     = today_ist.strftime("%Y-%m-%d")
+
+            res_w = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
+                                       "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
+            res_m = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
+                                       "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
+
+            if not isinstance(res_m, dict) or "candles" not in res_m or not res_m["candles"]:
+                ticker_base    = symbol.rsplit("-", 1)[0]
+                current_series = symbol.rsplit("-", 1)[-1]
+                for series in [s for s in SERIES_PRIORITY if s != current_series]:
+                    candidate = f"{ticker_base}-{series}"
+                    fb_w = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
+                                              "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
+                    fb_m = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
+                                              "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
+                    if isinstance(fb_m, dict) and "candles" in fb_m and fb_m["candles"]:
+                        res_w  = fb_w
+                        res_m  = fb_m
+                        symbol = candidate
+                        break
+                else:
+                    failed.append(symbol)
+                    continue
+
+            frames = []
+            if isinstance(res_w, dict) and "candles" in res_w and res_w["candles"]:
+                frames.append(pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol']))
+            if isinstance(res_m, dict) and "candles" in res_m and res_m["candles"]:
+                frames.append(pd.DataFrame(res_m['candles'], columns=['date','open','high','low','close','vol']))
+            if not frames:
+                failed.append(symbol)
+                continue
+
+            df = pd.concat(frames).drop_duplicates(subset='date').sort_values('date').reset_index(drop=True)
+            pullback_date = find_weekly_base(df)
+
+            if pullback_date is None or pullback_date < cutoff_date:
+                continue
+
+            signals.append((symbol, stock_name, sector, industry, basic_industry, rs_score,
+                            pullback_date, is_high_roce, is_moderate_growth))
+            log_progress(cursor, conn, f"🌿 {symbol} → Pullback: {pullback_date}", JOB)
+
+        except Exception as e:
+            failed.append(symbol)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                log_progress(cursor, conn, f"❌ Error on {symbol}: {e}", JOB)
+            except Exception:
+                pass
+
+        finally:
+            time.sleep(0.1)
+
+    try:
+        cursor.close()
+    except Exception:
+        pass
+    conn = psycopg2.connect(NEON_URL)
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM early_weekly_base")
+    if signals:
+        execute_values(cursor, """
+            INSERT INTO early_weekly_base
+                (fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
+                 pullback_date, is_high_roce, is_moderate_growth, updated_at)
+            VALUES %s
+        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], datetime.now(IST)) for s in signals])
+    conn.commit()
+
+    log_progress(cursor, conn, f"✅ {len(signals)} signals | {len(failed)} failed | {len(stocks)} scanned", JOB)
+    log_progress(cursor, conn, "🎉 Early Weekly Base Scan Complete!", JOB)
+
+    cursor.close()
+    conn.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--lookback-days', type=int, default=30)
+    parser.add_argument('--mode', choices=['daily_base', 'weekly_base'], default='daily_base')
     args = parser.parse_args()
-    run_first_daily_base_scan(lookback_days=args.lookback_days)
+    if args.mode == 'weekly_base':
+        run_early_weekly_base_scan(lookback_days=args.lookback_days)
+    else:
+        run_first_daily_base_scan(lookback_days=args.lookback_days)

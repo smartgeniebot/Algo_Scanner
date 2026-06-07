@@ -31,6 +31,7 @@ class IndustryRequest(BaseModel):
     basic_industries: Optional[List[str]] = None
     fundamentals: Optional[List[str]] = None
     weekly_ema_filter: Optional[bool] = True
+    lookback_days: Optional[int] = None
 
 def get_db_connection():
     # Connecting to Neon Cloud
@@ -115,6 +116,14 @@ async def get_stocks(request: IndustryRequest):
             fund_conditions.append("is_moderate_growth = True")
         if fund_conditions:
             query_conditions.append("(" + " OR ".join(fund_conditions) + ")")
+
+    # 3. Lookback filter: at least one intraday pullback must be within the window
+    if request.lookback_days and request.lookback_days > 0:
+        query_conditions.append("""(
+            first_15m_cross_time::date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+            OR first_1h_cross_time::date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        )""")
+        query_params.extend([request.lookback_days, request.lookback_days])
 
     where_clause = " AND ".join(query_conditions)
 
@@ -661,7 +670,7 @@ async def fyers_watchlist_done(body: dict):
 
 
 @app.get("/api/first-daily-base")
-async def get_first_daily_base(lookback_days: int = 30):
+async def get_first_daily_base(lookback_days: int = 30, weekly_ema_filter: bool = False):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -680,14 +689,22 @@ async def get_first_daily_base(lookback_days: int = 30):
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
 
-        cursor.execute("""
-            SELECT fyers_symbol, stock_name, sector, industry, basic_industry,
-                   rs_score, first_base_date, second_base_date,
-                   is_high_roce, is_moderate_growth
-            FROM first_daily_base
-            WHERE GREATEST(first_base_date, COALESCE(second_base_date, first_base_date)) >= %s
-            ORDER BY GREATEST(first_base_date, COALESCE(second_base_date, first_base_date)) DESC,
-                     rs_score DESC NULLS LAST
+        weekly_join = ""
+        weekly_cond = ""
+        if weekly_ema_filter:
+            weekly_join = "JOIN stocks s ON s.fyers_symbol = f.fyers_symbol"
+            weekly_cond = "AND s.weekly_ema_bullish = TRUE"
+
+        cursor.execute(f"""
+            SELECT f.fyers_symbol, f.stock_name, f.sector, f.industry, f.basic_industry,
+                   f.rs_score, f.first_base_date, f.second_base_date,
+                   f.is_high_roce, f.is_moderate_growth
+            FROM first_daily_base f
+            {weekly_join}
+            WHERE GREATEST(f.first_base_date, COALESCE(f.second_base_date, f.first_base_date)) >= %s
+            {weekly_cond}
+            ORDER BY GREATEST(f.first_base_date, COALESCE(f.second_base_date, f.first_base_date)) DESC,
+                     f.rs_score DESC NULLS LAST
         """, (cutoff,))
         rows = cursor.fetchall()
         cursor.close()
@@ -727,6 +744,80 @@ async def first_daily_base_progress(since_id: int = 0):
 @app.get("/api/first-daily-base-status")
 async def first_daily_base_status():
     return _get_workflow_status("first_daily_base_engine.yml")
+
+
+@app.get("/api/early-weekly-base")
+async def get_early_weekly_base(lookback_days: int = 30, weekly_ema_filter: bool = False):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'early_weekly_base'
+            )
+        """)
+        if not cursor.fetchone()["exists"]:
+            cursor.close()
+            conn.close()
+            return {"status": "success", "data": []}
+
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
+
+        weekly_join = ""
+        weekly_cond = ""
+        if weekly_ema_filter:
+            weekly_join = "JOIN stocks s ON s.fyers_symbol = e.fyers_symbol"
+            weekly_cond = "AND s.weekly_ema_bullish = TRUE"
+
+        cursor.execute(f"""
+            SELECT e.fyers_symbol, e.stock_name, e.sector, e.industry, e.basic_industry,
+                   e.rs_score, e.pullback_date, e.is_high_roce, e.is_moderate_growth
+            FROM early_weekly_base e
+            {weekly_join}
+            WHERE e.pullback_date >= %s
+            {weekly_cond}
+            ORDER BY e.pullback_date DESC, e.rs_score DESC NULLS LAST
+        """, (cutoff,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "data": [dict(r) for r in rows]}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": []}
+
+
+class EarlyWeeklyBaseRequest(BaseModel):
+    lookback_days: int = 30
+
+@app.post("/api/trigger-early-weekly-base")
+async def trigger_early_weekly_base(body: EarlyWeeklyBaseRequest = EarlyWeeklyBaseRequest()):
+    token = os.environ.get("GITHUB_TOKEN")
+    repo  = os.environ.get("GITHUB_REPO")
+
+    if not token or not repo:
+        return {"status": "error", "message": "Server missing GitHub credentials"}
+
+    _clear_job("early_weekly_base")
+
+    response = requests.post(
+        f"https://api.github.com/repos/{repo}/actions/workflows/early_weekly_base_engine.yml/dispatches",
+        headers=_gh_headers(), json={"ref": "main", "inputs": {"lookback_days": str(body.lookback_days)}}
+    )
+    if response.status_code == 204:
+        return {"status": "success", "message": "Early Weekly Base scan initiated"}
+    return {"status": "error", "message": f"GitHub Error: {response.text}"}
+
+
+@app.get("/api/early-weekly-base-progress")
+async def early_weekly_base_progress(since_id: int = 0):
+    return _get_progress("early_weekly_base", since_id)
+
+
+@app.get("/api/early-weekly-base-status")
+async def early_weekly_base_status():
+    return _get_workflow_status("early_weekly_base_engine.yml")
 
 
 if __name__ == "__main__":

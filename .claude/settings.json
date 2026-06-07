@@ -5,7 +5,8 @@
       "WebFetch(domain:fyers.in)",
       "WebFetch(domain:community.fyers.in)",
       "Bash(copy \"c:\\\\Users\\\\merly\\\\Desktop\\\\Algo_Scanner\\\\Run Watchlist Importer.bat\" \"c:\\\\Users\\\\merly\\\\Desktop\\\\Run Watchlist Importer.bat\")",
-      "Bash(Select-Object -Property FullName)"
+      "Bash(Select-Object -Property FullName)",
+      "Bash(python test_weekly_base.py)"
     ],
     "additionalDirectories": [
       "c:\\Users\\merly\\Desktop"

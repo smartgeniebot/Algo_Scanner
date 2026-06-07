@@ -42,9 +42,15 @@ function App() {
 
   const [fdbTriggerStatus, setFdbTriggerStatus] = useState('idle');
   const [fdbTriggerLog, setFdbTriggerLog] = useState([]);
-  const [fdbLookbackDays, setFdbLookbackDays] = useState(() => {
-    return parseInt(localStorage.getItem('fdbLookbackDays') || '30', 10);
+  const [lookbackDays, setLookbackDays] = useState(() => {
+    return parseInt(localStorage.getItem('lookbackDays') || localStorage.getItem('fdbLookbackDays') || '30', 10);
   });
+
+  const [earlyWeeklyBase, setEarlyWeeklyBase] = useState([]);
+  const [ewbLoading, setEwbLoading] = useState(false);
+  const [ewbSort, setEwbSort] = useState({ key: 'pullback_date', direction: 'desc' });
+  const [ewbTriggerStatus, setEwbTriggerStatus] = useState('idle');
+  const [ewbTriggerLog, setEwbTriggerLog] = useState([]);
 
   useEffect(() => {
     fetch('https://algo-scanner-lnck.onrender.com/api/filters')
@@ -58,17 +64,24 @@ function App() {
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ industries: [], basic_industries: [...micros], fundamentals, weekly_ema_filter: weeklyEmaFilter })
+      body: JSON.stringify({ industries: [], basic_industries: [...micros], fundamentals, weekly_ema_filter: weeklyEmaFilter, lookback_days: lookbackDays })
     }).then(r => r.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
 
-    // Also refresh Early Daily Bases filtered by current micros
+    // Also refresh Early Daily Bases
     setFdbLoading(true);
-    fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base?lookback_days=${fdbLookbackDays}`)
+    fetch(`https://algo-scanner-lnck.onrender.com/api/first-daily-base?lookback_days=${lookbackDays}&weekly_ema_filter=${weeklyEmaFilter}`)
       .then(r => r.json())
       .then(res => { setFirstDailyBase(res.data || []); setFdbLoading(false); })
       .catch(() => { setFirstDailyBase([]); setFdbLoading(false); });
+
+    // Also refresh Early Weekly Bases
+    setEwbLoading(true);
+    fetch(`https://algo-scanner-lnck.onrender.com/api/early-weekly-base?lookback_days=${lookbackDays}&weekly_ema_filter=${weeklyEmaFilter}`)
+      .then(r => r.json())
+      .then(res => { setEarlyWeeklyBase(res.data || []); setEwbLoading(false); })
+      .catch(() => { setEarlyWeeklyBase([]); setEwbLoading(false); });
   };
 
   const handleScan = () => {
@@ -97,7 +110,7 @@ function App() {
     }
 
     fetch('https://algo-scanner-lnck.onrender.com/api/stocks', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, weekly_ema_filter: weeklyEmaFilter })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, weekly_ema_filter: weeklyEmaFilter, lookback_days: lookbackDays })
     }).then(r => r.json())
       .then(res => { setStocks(res.data || []); setLoading(false); })
       .catch(err => { console.error("Scan Error:", err); setStocks([]); setLoading(false); });
@@ -117,6 +130,7 @@ function App() {
     setSelectedFundamentals([]);
     setStocks([]);
     setFirstDailyBase([]);
+    setEarlyWeeklyBase([]);
     setSearchTerm('');
     setActiveChart(null);
   };
@@ -300,7 +314,7 @@ function App() {
       const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-first-daily-base', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lookback_days: fdbLookbackDays })
+        body: JSON.stringify({ lookback_days: lookbackDays })
       });
       const d = await r.json();
       if (d.status !== 'success') { log(`❌ ${d.message || 'Unknown error — endpoint may not be deployed yet'}`); setFdbTriggerStatus('error'); return; }
@@ -347,19 +361,90 @@ function App() {
     });
   };
 
+  const handleTriggerEarlyWeeklyBase = async () => {
+    setEwbTriggerStatus('loading');
+    setEwbTriggerLog([]);
+    const log = (msg) => setEwbTriggerLog(prev => [...prev, msg]);
+
+    log('🌿 Triggering Early Weekly Base Scan via GitHub Actions...');
+    try {
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-early-weekly-base', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lookback_days: lookbackDays })
+      });
+      const d = await r.json();
+      if (d.status !== 'success') { log(`❌ ${d.message || 'Unknown error'}`); setEwbTriggerStatus('error'); return; }
+    } catch (e) { log(`❌ Network error: ${e.message}`); setEwbTriggerStatus('error'); return; }
+
+    log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
+    let lastId = 0;
+
+    const progressInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/early-weekly-base-progress?since_id=${lastId}`);
+        const d = await r.json();
+        if (d.lines && d.lines.length > 0) {
+          d.lines.forEach(({ id, line }) => { log(line); lastId = id; });
+        }
+      } catch (_) {}
+    }, 3000);
+
+    await new Promise((resolve, reject) => {
+      const ghInterval = setInterval(async () => {
+        try {
+          const r = await fetch('https://algo-scanner-lnck.onrender.com/api/early-weekly-base-status');
+          const d = await r.json();
+          if (d.status === 'completed') {
+            clearInterval(ghInterval);
+            setTimeout(async () => {
+              try {
+                const r2 = await fetch(`https://algo-scanner-lnck.onrender.com/api/early-weekly-base-progress?since_id=${lastId}`);
+                const d2 = await r2.json();
+                if (d2.lines && d2.lines.length > 0) d2.lines.forEach(({ line }) => log(line));
+              } catch (_) {}
+              clearInterval(progressInterval);
+              d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+            }, 4000);
+          }
+        } catch (_) {}
+      }, 15000);
+    }).then(() => {
+      setEwbTriggerStatus('success');
+    }).catch((e) => {
+      log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      clearInterval(progressInterval);
+      setEwbTriggerStatus('error');
+    });
+  };
+
   const handleExportCSV = () => {
     if (activeTabStocks.length === 0) return;
 
-    const isEarly = scannerSubTab === 'early';
-    const headers = isEarly
-      ? ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "1st Base Date", "2nd Base Date"]
-      : ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "Daily Cross Date", "1H Pullback Time", "15M Pullback Time"];
+    const isEarly   = scannerSubTab === 'early';
+    const isWeekly  = scannerSubTab === 'weekly';
+
+    const headers = isWeekly
+      ? ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "Pullback Date"]
+      : isEarly
+        ? ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "1st Base Date", "2nd Base Date"]
+        : ["Ticker", "Sector", "Macro Industry", "Micro Industry", "RS Score", "Daily Cross Date", "1H Pullback Time", "15M Pullback Time"];
 
     const csvRows = activeTabStocks.map(stock => {
       const cleanSymbol = stock.fyers_symbol ? stock.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '--';
       const mappedSector = Object.keys(hierarchy).find(sector =>
         Object.keys(hierarchy[sector] || {}).includes(stock.industry)
       ) || '--';
+      if (isWeekly) {
+        return [
+          cleanSymbol,
+          `"${stock.sector || mappedSector}"`,
+          `"${stock.industry || '--'}"`,
+          `"${stock.basic_industry || '--'}"`,
+          stock.rs_score !== null ? stock.rs_score : '--',
+          stock.pullback_date || '--'
+        ].join(',');
+      }
       if (isEarly) {
         return [
           cleanSymbol,
@@ -388,7 +473,8 @@ function App() {
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `ChartHawks_${isEarly ? 'EarlyBases' : 'Scan'}_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`);
+    const label = isWeekly ? 'EarlyWeeklyBases' : isEarly ? 'EarlyDailyBases' : 'Scan';
+    link.setAttribute('download', `ChartHawks_${label}_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -488,6 +574,7 @@ function App() {
 
   const toggleSort = (key) => setSortConfig({ key, direction: sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc' });
   const toggleFdbSort = (key) => setFdbSort({ key, direction: fdbSort.key === key && fdbSort.direction === 'desc' ? 'asc' : 'desc' });
+  const toggleEwbSort = (key) => setEwbSort({ key, direction: ewbSort.key === key && ewbSort.direction === 'desc' ? 'asc' : 'desc' });
 
   // Early Daily Bases: filter by selectedMicros + fundamentals + searchTerm + sort
   const filteredFdb = useMemo(() => {
@@ -529,8 +616,47 @@ function App() {
     return items;
   }, [filteredFdb, fdbSort]);
 
+  // Early Weekly Base: filter + sort
+  const filteredEwb = useMemo(() => {
+    let items = earlyWeeklyBase;
+    if (selectedMicros.size > 0) {
+      items = items.filter(s => selectedMicros.has(s.basic_industry));
+    }
+    if (selectedFundamentals.length > 0) {
+      items = items.filter(s => {
+        if (selectedFundamentals.includes('high_growth') && s.is_high_roce) return true;
+        if (selectedFundamentals.includes('moderate_growth') && s.is_moderate_growth) return true;
+        return false;
+      });
+    }
+    if (searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      items = items.filter(s => Object.values(s).some(v => String(v || '').toLowerCase().includes(lowerSearch)));
+    }
+    return items;
+  }, [earlyWeeklyBase, selectedMicros, selectedFundamentals, searchTerm]);
+
+  const sortedEwb = useMemo(() => {
+    const items = [...filteredEwb];
+    if (!ewbSort.key) return items;
+    items.sort((a, b) => {
+      let va = a[ewbSort.key], vb = b[ewbSort.key];
+      if (ewbSort.key === 'pullback_date') {
+        va = va ? new Date(va).getTime() : (ewbSort.direction === 'asc' ? Infinity : -Infinity);
+        vb = vb ? new Date(vb).getTime() : (ewbSort.direction === 'asc' ? Infinity : -Infinity);
+      } else {
+        va = va ?? (ewbSort.direction === 'asc' ? Infinity : -Infinity);
+        vb = vb ?? (ewbSort.direction === 'asc' ? Infinity : -Infinity);
+      }
+      if (va < vb) return ewbSort.direction === 'asc' ? -1 : 1;
+      if (va > vb) return ewbSort.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return items;
+  }, [filteredEwb, ewbSort]);
+
   // Active sub-tab data for Export / Watchlist
-  const activeTabStocks = scannerSubTab === 'all' ? sortedStocks : sortedFdb;
+  const activeTabStocks = scannerSubTab === 'all' ? sortedStocks : scannerSubTab === 'early' ? sortedFdb : sortedEwb;
 
   const themes = {
     light: {  
@@ -698,6 +824,9 @@ function App() {
               <button onClick={() => setScannerSubTab('early')} style={{ ...tabStyle, backgroundColor: scannerSubTab === 'early' ? t.btnPrimaryBg : t.bgApp, color: scannerSubTab === 'early' ? '#fff' : t.textMuted }}>
                 🏛️ Early Daily Bases{sortedFdb.length > 0 ? ` (${sortedFdb.length})` : ''}
               </button>
+              <button onClick={() => setScannerSubTab('weekly')} style={{ ...tabStyle, backgroundColor: scannerSubTab === 'weekly' ? t.btnPrimaryBg : t.bgApp, color: scannerSubTab === 'weekly' ? '#fff' : t.textMuted }}>
+                🌿 Early Weekly Bases{sortedEwb.length > 0 ? ` (${sortedEwb.length})` : ''}
+              </button>
             </div>
 
             {/* Results area */}
@@ -756,6 +885,43 @@ function App() {
                     </div>
                   )}
                 </>
+              ) : scannerSubTab === 'weekly' ? (
+                /* Early Weekly Bases sub-tab */
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center', padding: '14px 0', borderBottom: `2px solid ${t.border}`, fontWeight: '900', fontSize: '13px', color: t.textMuted, backgroundColor: t.bgPanel, flexShrink: 0 }}>
+                    <div onClick={() => toggleEwbSort('fyers_symbol')} style={headerSortStyle}>Ticker ⇅</div>
+                    <div onClick={() => toggleEwbSort('rs_score')} style={headerSortStyle}>RS Score ⇅</div>
+                    <div onClick={() => toggleEwbSort('pullback_date')} style={headerSortStyle}>Pullback Date ⇅</div>
+                    <div onClick={() => toggleEwbSort('industry')} style={headerSortStyle}>Industry &amp; Sector ⇅</div>
+                  </div>
+                  <div style={{ flex: 1, overflowY: 'auto' }}>
+                    {ewbLoading ? (
+                      <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>Scanning...</div>
+                    ) : sortedEwb.length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted }}>
+                        {earlyWeeklyBase.length === 0 ? 'No signals found. Select filters and click Scan, or run the scan from Settings.' : 'No results match your filters.'}
+                      </div>
+                    ) : sortedEwb.map((s, idx) => {
+                      const cleanTicker = s.fyers_symbol ? s.fyers_symbol.split(':')[1].replace(/-EQ$|-BE$|-BZ$|-BL$|-BT$|-SM$|-ST$/, '') : '';
+                      return (
+                        <div key={idx}
+                          style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr 1.8fr', width: '100%', alignItems: 'center', textAlign: 'center', padding: '14px 0', borderBottom: `1px solid ${t.border}`, fontSize: '13px', transition: 'background-color 0.15s' }}
+                          onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
+                          onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          <div style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</div>
+                          <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '3px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? '--'}</div>
+                          <div style={{ fontWeight: '700', color: '#f59e0b' }}>{formatDT(s.pullback_date)}</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '12px', fontWeight: '700', color: t.textTicker, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.basic_industry}>{s.basic_industry || s.industry}</div>
+                            <div style={{ fontSize: '10px', color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry}</div>
+                            <div style={{ fontSize: '10px', color: t.textMuted, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.sector}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               ) : (
                 /* Early Daily Bases sub-tab */
                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
@@ -841,7 +1007,7 @@ function App() {
                 <div>
                   <div style={{ fontWeight: '700', fontSize: '14px', color: t.textMain, marginBottom: '3px' }}>Weekly EMA Filter (20 &gt; 50)</div>
                   <div style={{ fontSize: '12px', color: t.textMuted, lineHeight: '1.5' }}>
-                    When enabled, the Scanner only shows stocks where <strong>Weekly EMA20 &gt; EMA50</strong> — confirming a weekly uptrend. Daily crossover and intraday pulse also respect this condition. Enabled by default.
+                    When enabled, only shows stocks where <strong>Weekly EMA20 &gt; EMA50</strong> — confirming a weekly uptrend. Applies to all 3 Scanner tabs (All Daily Bases, Early Daily Bases, Early Weekly Bases). Enabled by default.
                   </div>
                 </div>
               </label>
@@ -952,15 +1118,15 @@ function App() {
                   type="number"
                   min="7"
                   max="365"
-                  value={fdbLookbackDays}
+                  value={lookbackDays}
                   onChange={e => {
                     const val = Math.max(7, Math.min(365, parseInt(e.target.value) || 30));
-                    setFdbLookbackDays(val);
-                    localStorage.setItem('fdbLookbackDays', val);
+                    setLookbackDays(val);
+                    localStorage.setItem('lookbackDays', val);
                   }}
                   style={{ width: '80px', padding: '6px 10px', borderRadius: '6px', border: `1px solid ${t.border}`, backgroundColor: t.inputBg, color: t.textMain, fontSize: '13px', fontWeight: '700', textAlign: 'center' }}
                 />
-                <span style={{ fontSize: '12px', color: t.textMuted }}>Only signals within this many days show in the 1st Daily Base tab</span>
+                <span style={{ fontSize: '12px', color: t.textMuted }}>Applies to all 3 Scanner tabs — filters stocks by signal date</span>
               </div>
               <button
                 onClick={handleTriggerFirstDailyBase}
@@ -997,6 +1163,51 @@ function App() {
                     <div key={i} style={{ color: line.startsWith('❌') ? '#f87171' : line.startsWith('✅') || line.startsWith('🎉') ? '#4ade80' : line.startsWith('🎯') || line.startsWith('📊') || line.startsWith('🏛️') ? '#60a5fa' : line.startsWith('  ↳') ? '#94a3b8' : line.startsWith('⚠️') ? '#fbbf24' : '#e2e8f0' }}>{line}</div>
                   ))}
                   {fdbTriggerStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
+                </div>
+              )}
+            </div>
+
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Early Weekly Base Scan</div>
+                <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
+                  Triggers the <strong>early_weekly_base_engine</strong> workflow on GitHub Actions. Detects stocks where <strong>Daily EMA50 crossed above SMA200</strong> and then had a <strong>first pullback with candle Low below EMA40</strong>. Uses the shared Lookback Days window above. Runs automatically at 02:30 AM IST daily.
+                </div>
+              </div>
+              <button
+                onClick={handleTriggerEarlyWeeklyBase}
+                disabled={ewbTriggerStatus !== 'idle'}
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: ewbTriggerStatus === 'idle' ? 'pointer' : 'not-allowed',
+                  transition: 'all 0.2s',
+                  backgroundColor:
+                    ewbTriggerStatus === 'loading' ? '#eab308' :
+                    ewbTriggerStatus === 'success' ? '#10b981' :
+                    ewbTriggerStatus === 'error'   ? '#ef4444' :
+                    t.btnPrimaryBg,
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                {ewbTriggerStatus === 'idle'    && '🌿 Run Early Weekly Base Scan'}
+                {ewbTriggerStatus === 'loading' && '⏳ Starting...'}
+                {ewbTriggerStatus === 'success' && '✅ Triggered!'}
+                {ewbTriggerStatus === 'error'   && '❌ Failed — Retry'}
+              </button>
+              {ewbTriggerLog.length > 0 && (
+                <div style={{ backgroundColor: theme === 'dark' ? '#020617' : '#0f172a', borderRadius: '8px', padding: '14px 16px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.8', maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {ewbTriggerLog.map((line, i) => (
+                    <div key={i} style={{ color: line.startsWith('❌') ? '#f87171' : line.startsWith('✅') || line.startsWith('🎉') ? '#4ade80' : line.startsWith('🌿') || line.startsWith('📊') ? '#60a5fa' : line.startsWith('  ↳') ? '#94a3b8' : line.startsWith('⚠️') ? '#fbbf24' : '#e2e8f0' }}>{line}</div>
+                  ))}
+                  {ewbTriggerStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
                 </div>
               )}
             </div>
