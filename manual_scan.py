@@ -256,8 +256,13 @@ def run_daily_scan():
                 continue
 
             # --- Cache main-fetch candles to daily_ohlcv for downstream jobs ---
-            ohlcv_rows = [(symbol, int(r['date']), r['open'], r['high'], r['low'], r['close'], int(r['vol']))
-                          for _, r in df.iterrows()]
+            ohlcv_rows = list(zip(
+                [symbol] * len(df),
+                df['date'].astype(int).tolist(),
+                df['open'].tolist(), df['high'].tolist(),
+                df['low'].tolist(), df['close'].tolist(),
+                df['vol'].astype(int).tolist()
+            ))
             cursor.executemany("""
                 INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -290,8 +295,13 @@ def run_daily_scan():
                 df_warmup = pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol'])
                 frames.append(df_warmup)
                 # Cache warmup candles too so base scans have full 2yr history
-                warmup_rows = [(symbol, int(r['date']), r['open'], r['high'], r['low'], r['close'], int(r['vol']))
-                               for _, r in df_warmup.iterrows()]
+                warmup_rows = list(zip(
+                    [symbol] * len(df_warmup),
+                    df_warmup['date'].astype(int).tolist(),
+                    df_warmup['open'].tolist(), df_warmup['high'].tolist(),
+                    df_warmup['low'].tolist(), df_warmup['close'].tolist(),
+                    df_warmup['vol'].astype(int).tolist()
+                ))
                 cursor.executemany("""
                     INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)

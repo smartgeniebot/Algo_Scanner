@@ -258,7 +258,13 @@ def main():
     cur.execute("DELETE FROM stocks WHERE fyers_symbol NOT IN (SELECT fyers_symbol FROM _nse_fresh)")
     deleted = cur.rowcount
     # Clear OHLCV cache so next market_engine run rebuilds it fresh with current stock list
-    cur.execute("TRUNCATE TABLE IF EXISTS daily_ohlcv")
+    cur.execute("""
+        DO $$ BEGIN
+            IF EXISTS (SELECT FROM pg_tables WHERE tablename = 'daily_ohlcv') THEN
+                TRUNCATE TABLE daily_ohlcv;
+            END IF;
+        END $$
+    """)
     conn.commit()
     log_progress(f"✅ Upserted {total} stocks | Removed {deleted} delisted | daily_ohlcv cache cleared")
 

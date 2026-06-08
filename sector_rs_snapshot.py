@@ -158,6 +158,10 @@ def do_fetch(backfill):
     conn.close()
     print(f"✅ Got closes for {len(stock_closes)} / {len(seen)} stocks")
 
+    if not stock_closes:
+        print("❌ daily_ohlcv cache is empty — market_engine must run first. Aborting.")
+        return False
+
     # Save everything to cache
     cache = {
         "nifty_closes": nifty_closes,

@@ -96,29 +96,35 @@ def find_bases(df):
     return (bases_found[0], bases_found[1] if len(bases_found) > 1 else None)
 
 
-def load_ohlcv_from_db(cursor, symbol):
+def load_ohlcv_from_db(conn, symbol):
     """Load 2yr daily OHLCV from daily_ohlcv cache table. Returns DataFrame or None."""
-    cursor.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         SELECT date, open, high, low, close, vol
         FROM daily_ohlcv
         WHERE fyers_symbol = %s
         ORDER BY date ASC
     """, (symbol,))
-    rows = cursor.fetchall()
+    rows = cur.fetchall()
+    cur.close()
     if not rows:
         return None
     df = pd.DataFrame(rows, columns=['date','open','high','low','close','vol'])
     return df
 
 
-def check_cache_fresh(cursor):
-    """Verify daily_ohlcv was populated today. Abort if stale."""
-    today_ist = datetime.now(IST).date()
-    today_epoch_start = int(datetime.combine(today_ist, datetime.min.time())
-                            .replace(tzinfo=IST).timestamp())
-    cursor.execute("SELECT COUNT(*) FROM daily_ohlcv WHERE date >= %s", (today_epoch_start,))
-    count = cursor.fetchone()[0]
-    return count > 0
+def check_cache_fresh(conn, cursor):
+    """Verify daily_ohlcv was populated today. Returns False if table missing or stale."""
+    try:
+        today_ist = datetime.now(IST).date()
+        today_epoch_start = int(datetime.combine(today_ist, datetime.min.time())
+                                .replace(tzinfo=IST).timestamp())
+        cursor.execute("SELECT COUNT(*) FROM daily_ohlcv WHERE date >= %s", (today_epoch_start,))
+        count = cursor.fetchone()[0]
+        return count > 0
+    except Exception:
+        conn.rollback()
+        return False
 
 
 def run_first_daily_base_scan(lookback_days=30):
@@ -163,7 +169,7 @@ def run_first_daily_base_scan(lookback_days=30):
     today_ist = datetime.now(IST).date()
     cutoff_date = (today_ist - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
 
-    if not check_cache_fresh(cursor):
+    if not check_cache_fresh(conn, cursor):
         log_progress(cursor, conn, "❌ daily_ohlcv cache is not fresh for today — market_engine may not have run yet. Aborting.")
         cursor.close()
         conn.close()
@@ -183,7 +189,7 @@ def run_first_daily_base_scan(lookback_days=30):
 
     for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
         try:
-            df = load_ohlcv_from_db(cursor, symbol)
+            df = load_ohlcv_from_db(conn, symbol)
             if df is None or len(df) < 210:
                 failed.append(symbol)
                 continue
@@ -217,6 +223,7 @@ def run_first_daily_base_scan(lookback_days=30):
 
     try:
         cursor.close()
+        conn.close()
     except Exception:
         pass
     conn = psycopg2.connect(NEON_URL)
@@ -316,7 +323,7 @@ def run_early_weekly_base_scan(lookback_days=30):
     today_ist = datetime.now(IST).date()
     cutoff_date = (today_ist - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
 
-    if not check_cache_fresh(cursor):
+    if not check_cache_fresh(conn, cursor):
         log_progress(cursor, conn, "❌ daily_ohlcv cache is not fresh for today — market_engine may not have run yet. Aborting.", JOB)
         cursor.close()
         conn.close()
@@ -336,7 +343,7 @@ def run_early_weekly_base_scan(lookback_days=30):
 
     for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
         try:
-            df = load_ohlcv_from_db(cursor, symbol)
+            df = load_ohlcv_from_db(conn, symbol)
             if df is None or len(df) < 210:
                 failed.append(symbol)
                 continue
@@ -363,6 +370,7 @@ def run_early_weekly_base_scan(lookback_days=30):
 
     try:
         cursor.close()
+        conn.close()
     except Exception:
         pass
     conn = psycopg2.connect(NEON_URL)
