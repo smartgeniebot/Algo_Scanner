@@ -57,6 +57,23 @@ def fetch_safe(fyers, payload, retries=3):
     return {}
 
 
+def fetch_daily_closes_from_db(conn, symbol):
+    """Return a date-indexed Series of plain Python floats from daily_ohlcv cache."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT date, close FROM daily_ohlcv
+        WHERE fyers_symbol = %s ORDER BY date ASC
+    """, (symbol,))
+    rows = cur.fetchall()
+    cur.close()
+    if not rows:
+        return pd.Series(dtype=float)
+    df = pd.DataFrame(rows, columns=["ts", "close"])
+    df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
+    s = df.set_index("date")["close"]
+    return s.map(float)
+
+
 def fetch_daily_closes(fyers, symbol, range_from, range_to):
     """Return a date-indexed Series of plain Python floats, or empty Series."""
     res = fetch_safe(fyers, {
@@ -68,7 +85,6 @@ def fetch_daily_closes(fyers, symbol, range_from, range_to):
     df = pd.DataFrame(res["candles"], columns=["ts", "open", "high", "low", "close", "vol"])
     df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
     s = df.set_index("date")["close"]
-    # Convert every value to plain Python float so pickle and psycopg2 are happy
     return s.map(float)
 
 
@@ -88,17 +104,16 @@ def ensure_table(cursor, conn):
 
 
 def do_fetch(backfill):
-    """Phase 1 — fetch all stock closes from Fyers and cache to disk."""
+    """Phase 1 — load stock closes from daily_ohlcv DB cache; fetch Nifty benchmark from Fyers."""
     today_ist  = datetime.now(IST).date()
-    # Always fetch 140 calendar days so we can check full 63-trading-day
-    # coverage for every stock, even on a daily (non-backfill) run.
     cal_days   = 140
     range_from = (today_ist - timedelta(days=cal_days)).strftime("%Y-%m-%d")
     range_to   = today_ist.strftime("%Y-%m-%d")
 
     fyers = get_fyers()
 
-    print("📥 Fetching Nifty500 benchmark closes...")
+    # Nifty index is not in daily_ohlcv — fetch from Fyers as before
+    print("📥 Fetching Nifty500 benchmark closes from Fyers...")
     nifty_closes = fetch_daily_closes(fyers, NIFTY500, range_from, range_to)
     if nifty_closes.empty:
         print("⚠️  Nifty500 failed, falling back to Nifty50...")
@@ -108,7 +123,7 @@ def do_fetch(backfill):
         return False
     print(f"✅ Nifty benchmark: {len(nifty_closes)} days ({nifty_closes.index[0]} → {nifty_closes.index[-1]})")
 
-    # Load stock list from DB (short-lived connection — just a quick read)
+    # Load stock list + closes from DB cache — no Fyers calls for individual stocks
     conn   = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
     cursor.execute("""
@@ -118,8 +133,6 @@ def do_fetch(backfill):
           AND fyers_symbol IS NOT NULL
     """)
     stock_rows = cursor.fetchall()
-    cursor.close()
-    conn.close()
     print(f"📊 Loaded {len(stock_rows)} stocks from DB")
 
     # Build group mappings
@@ -129,18 +142,20 @@ def do_fetch(backfill):
         if ind: groups["industry"].setdefault(ind, []).append(sym)
         if bi:  groups["basic_industry"].setdefault(bi, []).append(sym)
 
-    # Fetch closes
-    print(f"\n📡 Fetching daily closes for {len(stock_rows)} stocks...")
+    # Load closes from daily_ohlcv cache
+    print(f"\n📂 Loading daily closes from daily_ohlcv cache for {len(stock_rows)} stocks...")
     stock_closes = {}
     seen = set()
     for sym, *_ in tqdm(stock_rows):
         if sym in seen:
             continue
         seen.add(sym)
-        closes = fetch_daily_closes(fyers, sym, range_from, range_to)
+        closes = fetch_daily_closes_from_db(conn, sym)
         if not closes.empty:
             stock_closes[sym] = closes
 
+    cursor.close()
+    conn.close()
     print(f"✅ Got closes for {len(stock_closes)} / {len(seen)} stocks")
 
     # Save everything to cache

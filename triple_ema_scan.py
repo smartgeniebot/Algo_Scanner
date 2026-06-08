@@ -1,15 +1,12 @@
 import argparse
-import time
 import pandas as pd
 import pandas_ta_classic as ta
-from fyers_apiv3 import fyersModel
 from datetime import datetime, timedelta, timezone
 from tqdm import tqdm
 import psycopg2
 from psycopg2.extras import execute_values
 from config import NEON_URL
 
-CLIENT_ID = "QTKF8KZDM9-100"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 def log_progress(cursor, conn, msg, job='first_daily_base'):
@@ -19,25 +16,6 @@ def log_progress(cursor, conn, msg, job='first_daily_base'):
         conn.commit()
     except Exception:
         pass
-
-def get_fyers():
-    with open("access_token.txt", "r") as f:
-        token = f.read().strip()
-    return fyersModel.FyersModel(client_id=CLIENT_ID, is_async=False, token=token, log_path="")
-
-def fetch_safe(fyers_obj, payload):
-    for attempt in range(3):
-        res = fyers_obj.history(data=payload)
-        if isinstance(res, dict):
-            if res.get('s') == 'ok' and res.get('candles'):
-                return res
-            if 'limit' in str(res.get('message', '')).lower():
-                tqdm.write("⏳ Fyers Speed Limit Hit! Cooling down for 45 seconds...")
-                time.sleep(45)
-                continue
-        if attempt < 2:
-            time.sleep(3)
-    return res
 
 def find_bases(df):
     """
@@ -118,6 +96,31 @@ def find_bases(df):
     return (bases_found[0], bases_found[1] if len(bases_found) > 1 else None)
 
 
+def load_ohlcv_from_db(cursor, symbol):
+    """Load 2yr daily OHLCV from daily_ohlcv cache table. Returns DataFrame or None."""
+    cursor.execute("""
+        SELECT date, open, high, low, close, vol
+        FROM daily_ohlcv
+        WHERE fyers_symbol = %s
+        ORDER BY date ASC
+    """, (symbol,))
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+    df = pd.DataFrame(rows, columns=['date','open','high','low','close','vol'])
+    return df
+
+
+def check_cache_fresh(cursor):
+    """Verify daily_ohlcv was populated today. Abort if stale."""
+    today_ist = datetime.now(IST).date()
+    today_epoch_start = int(datetime.combine(today_ist, datetime.min.time())
+                            .replace(tzinfo=IST).timestamp())
+    cursor.execute("SELECT COUNT(*) FROM daily_ohlcv WHERE date >= %s", (today_epoch_start,))
+    count = cursor.fetchone()[0]
+    return count > 0
+
+
 def run_first_daily_base_scan(lookback_days=30):
     conn = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
@@ -130,7 +133,6 @@ def run_first_daily_base_scan(lookback_days=30):
     """)
     cursor.execute("DELETE FROM job_progress WHERE job = 'first_daily_base'")
 
-    # Create table if it doesn't exist yet
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS first_daily_base (
             id               SERIAL PRIMARY KEY,
@@ -147,7 +149,6 @@ def run_first_daily_base_scan(lookback_days=30):
     """)
     conn.commit()
 
-    # Migrate schema: add new columns, drop old ones
     for col, coltype in [('first_base_date', 'TEXT'), ('second_base_date', 'TEXT'),
                          ('is_high_roce', 'BOOLEAN DEFAULT FALSE'),
                          ('is_moderate_growth', 'BOOLEAN DEFAULT FALSE')]:
@@ -159,9 +160,14 @@ def run_first_daily_base_scan(lookback_days=30):
 
     log_progress(cursor, conn, f"🚀 1st Daily Base Scan Started (lookback={lookback_days} days)")
 
-    fyers = get_fyers()
     today_ist = datetime.now(IST).date()
     cutoff_date = (today_ist - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+
+    if not check_cache_fresh(cursor):
+        log_progress(cursor, conn, "❌ daily_ohlcv cache is not fresh for today — market_engine may not have run yet. Aborting.")
+        cursor.close()
+        conn.close()
+        return
 
     cursor.execute("""
         SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
@@ -170,55 +176,18 @@ def run_first_daily_base_scan(lookback_days=30):
         WHERE fyers_symbol IS NOT NULL
     """)
     stocks = cursor.fetchall()
-    log_progress(cursor, conn, f"📊 Scanning {len(stocks)} stocks | cutoff={cutoff_date}...")
+    log_progress(cursor, conn, f"📊 Scanning {len(stocks)} stocks from daily_ohlcv cache | cutoff={cutoff_date}...")
 
-    SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
     signals = []
     failed  = []
 
     for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
         try:
-            # Two fetches: warmup batch (days 730-365) + signal batch (last 364 days)
-            # Combined gives ~500 bars so SMA200 warmup (200 bars) leaves ~300 usable bars
-            warmup_from = (today_ist - timedelta(days=730)).strftime("%Y-%m-%d")
-            warmup_to   = (today_ist - timedelta(days=365)).strftime("%Y-%m-%d")
-            main_from   = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
-            main_to     = today_ist.strftime("%Y-%m-%d")
-
-            res_w = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
-                                       "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
-            res_m = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
-                                       "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
-
-            # Series fallback if main fetch failed
-            if not isinstance(res_m, dict) or "candles" not in res_m or not res_m["candles"]:
-                ticker_base    = symbol.rsplit("-", 1)[0]
-                current_series = symbol.rsplit("-", 1)[-1]
-                for series in [s for s in SERIES_PRIORITY if s != current_series]:
-                    candidate = f"{ticker_base}-{series}"
-                    fb_w = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
-                                              "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
-                    fb_m = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
-                                              "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
-                    if isinstance(fb_m, dict) and "candles" in fb_m and fb_m["candles"]:
-                        res_w  = fb_w
-                        res_m  = fb_m
-                        symbol = candidate
-                        break
-                else:
-                    failed.append(symbol)
-                    continue
-
-            frames = []
-            if isinstance(res_w, dict) and "candles" in res_w and res_w["candles"]:
-                frames.append(pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol']))
-            if isinstance(res_m, dict) and "candles" in res_m and res_m["candles"]:
-                frames.append(pd.DataFrame(res_m['candles'], columns=['date','open','high','low','close','vol']))
-            if not frames:
+            df = load_ohlcv_from_db(cursor, symbol)
+            if df is None or len(df) < 210:
                 failed.append(symbol)
                 continue
 
-            df = pd.concat(frames).drop_duplicates(subset='date').sort_values('date').reset_index(drop=True)
             result = find_bases(df)
 
             if result is None:
@@ -226,7 +195,6 @@ def run_first_daily_base_scan(lookback_days=30):
 
             first_base, second_base = result
 
-            # Include if either base signal is within the last 30 days
             most_recent = second_base if second_base else first_base
             if most_recent < cutoff_date:
                 continue
@@ -247,11 +215,6 @@ def run_first_daily_base_scan(lookback_days=30):
             except Exception:
                 pass
 
-        finally:
-            time.sleep(0.1)
-
-    # Always close the loop cursor and open a fresh one for the final write,
-    # so a mid-loop DB error / rollback cannot leave us with a closed cursor here.
     try:
         cursor.close()
     except Exception:
@@ -350,9 +313,14 @@ def run_early_weekly_base_scan(lookback_days=30):
 
     log_progress(cursor, conn, f"🌿 Early Weekly Base Scan Started (lookback={lookback_days} days)", JOB)
 
-    fyers = get_fyers()
     today_ist = datetime.now(IST).date()
     cutoff_date = (today_ist - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+
+    if not check_cache_fresh(cursor):
+        log_progress(cursor, conn, "❌ daily_ohlcv cache is not fresh for today — market_engine may not have run yet. Aborting.", JOB)
+        cursor.close()
+        conn.close()
+        return
 
     cursor.execute("""
         SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
@@ -361,52 +329,18 @@ def run_early_weekly_base_scan(lookback_days=30):
         WHERE fyers_symbol IS NOT NULL
     """)
     stocks = cursor.fetchall()
-    log_progress(cursor, conn, f"📊 Scanning {len(stocks)} stocks | cutoff={cutoff_date}...", JOB)
+    log_progress(cursor, conn, f"📊 Scanning {len(stocks)} stocks from daily_ohlcv cache | cutoff={cutoff_date}...", JOB)
 
-    SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
     signals = []
     failed  = []
 
     for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
         try:
-            warmup_from = (today_ist - timedelta(days=730)).strftime("%Y-%m-%d")
-            warmup_to   = (today_ist - timedelta(days=365)).strftime("%Y-%m-%d")
-            main_from   = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
-            main_to     = today_ist.strftime("%Y-%m-%d")
-
-            res_w = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
-                                       "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
-            res_m = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
-                                       "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
-
-            if not isinstance(res_m, dict) or "candles" not in res_m or not res_m["candles"]:
-                ticker_base    = symbol.rsplit("-", 1)[0]
-                current_series = symbol.rsplit("-", 1)[-1]
-                for series in [s for s in SERIES_PRIORITY if s != current_series]:
-                    candidate = f"{ticker_base}-{series}"
-                    fb_w = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
-                                              "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
-                    fb_m = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
-                                              "range_from": main_from, "range_to": main_to, "cont_flag": "1"})
-                    if isinstance(fb_m, dict) and "candles" in fb_m and fb_m["candles"]:
-                        res_w  = fb_w
-                        res_m  = fb_m
-                        symbol = candidate
-                        break
-                else:
-                    failed.append(symbol)
-                    continue
-
-            frames = []
-            if isinstance(res_w, dict) and "candles" in res_w and res_w["candles"]:
-                frames.append(pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol']))
-            if isinstance(res_m, dict) and "candles" in res_m and res_m["candles"]:
-                frames.append(pd.DataFrame(res_m['candles'], columns=['date','open','high','low','close','vol']))
-            if not frames:
+            df = load_ohlcv_from_db(cursor, symbol)
+            if df is None or len(df) < 210:
                 failed.append(symbol)
                 continue
 
-            df = pd.concat(frames).drop_duplicates(subset='date').sort_values('date').reset_index(drop=True)
             pullback_date = find_weekly_base(df)
 
             if pullback_date is None or pullback_date < cutoff_date:
@@ -427,9 +361,6 @@ def run_early_weekly_base_scan(lookback_days=30):
             except Exception:
                 pass
 
-        finally:
-            time.sleep(0.1)
-
     try:
         cursor.close()
     except Exception:
@@ -447,7 +378,7 @@ def run_early_weekly_base_scan(lookback_days=30):
         """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], datetime.now(IST)) for s in signals])
     conn.commit()
 
-    log_progress(cursor, conn, f"✅ {len(signals)} signals | {len(failed)} failed | {len(stocks)} scanned", JOB)
+    log_progress(cursor, conn, f"✅ {len(signals)} signals | {len(failed)} no-data | {len(stocks)} scanned", JOB)
     log_progress(cursor, conn, "🎉 Early Weekly Base Scan Complete!", JOB)
 
     cursor.close()
@@ -459,6 +390,7 @@ if __name__ == "__main__":
     parser.add_argument('--lookback-days', type=int, default=30)
     parser.add_argument('--mode', choices=['daily_base', 'weekly_base'], default='daily_base')
     args = parser.parse_args()
+
     if args.mode == 'weekly_base':
         run_early_weekly_base_scan(lookback_days=args.lookback_days)
     else:

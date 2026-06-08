@@ -2,7 +2,7 @@ name: Chart Hawks 1st Daily Base Engine
 
 on:
   schedule:
-    # Runs at 20:30 UTC (02:00 AM IST next day) — job 3 of 3, 4 hrs after sector_rs_engine (10:00 PM IST)
+    # Runs at 20:30 UTC (02:00 AM IST next day) — reads from daily_ohlcv cache populated by market_engine
     - cron: '30 20 * * *'
   workflow_dispatch:
     inputs:
@@ -28,16 +28,7 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
 
-      - name: 🔐 Step 1 - Auto Login
-        env:
-          FYERS_ID: ${{ secrets.FYERS_ID }}
-          TOTP_KEY: ${{ secrets.TOTP_KEY }}
-          PIN: ${{ secrets.PIN }}
-          CLIENT_ID: ${{ secrets.CLIENT_ID }}
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-        run: python auth.py
-
-      - name: 🔍 Step 2 - 1st Daily Base Scan
+      - name: 1st Daily Base Scan
         env:
           NEON_URL: ${{ secrets.NEON_URL }}
         run: python triple_ema_scan.py --lookback-days ${{ github.event.inputs.lookback_days || '30' }}

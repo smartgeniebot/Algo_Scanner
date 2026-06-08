@@ -169,6 +169,24 @@ def run_daily_scan():
     cursor.execute("""
         ALTER TABLE stocks ADD COLUMN IF NOT EXISTS weekly_ema_bullish BOOLEAN DEFAULT FALSE
     """)
+
+    # Shared OHLCV cache — populated here, consumed by base scan jobs later tonight
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_ohlcv (
+            fyers_symbol  TEXT    NOT NULL,
+            date          BIGINT  NOT NULL,
+            open          FLOAT,
+            high          FLOAT,
+            low           FLOAT,
+            close         FLOAT,
+            vol           BIGINT,
+            PRIMARY KEY (fyers_symbol, date)
+        )
+    """)
+    # Prune data older than 730 days to keep table size bounded
+    cutoff_epoch = int((datetime.combine(today_ist - timedelta(days=730), datetime.min.time())
+                        .replace(tzinfo=IST)).timestamp())
+    cursor.execute("DELETE FROM daily_ohlcv WHERE date < %s", (cutoff_epoch,))
     conn.commit()
 
     cursor.execute("SELECT id, fyers_symbol, daily_cross_active, daily_cross_date FROM stocks")
@@ -237,6 +255,18 @@ def run_daily_scan():
             if len(df) < 56:
                 continue
 
+            # --- Cache main-fetch candles to daily_ohlcv for downstream jobs ---
+            ohlcv_rows = [(symbol, int(r['date']), r['open'], r['high'], r['low'], r['close'], int(r['vol']))
+                          for _, r in df.iterrows()]
+            cursor.executemany("""
+                INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (fyers_symbol, date) DO UPDATE SET
+                    open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                    close=EXCLUDED.close, vol=EXCLUDED.vol
+            """, ohlcv_rows)
+            conn.commit()
+
             bars = min(len(df), 56)
             s_curr, s_past = df['close'].iloc[-1], df['close'].iloc[-bars]
             n_curr, n_past = n_df['close'].iloc[-1], n_df['close'].iloc[-bars]
@@ -257,7 +287,19 @@ def run_daily_scan():
                                        "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1"})
             frames = []
             if isinstance(res_w, dict) and "candles" in res_w and res_w["candles"]:
-                frames.append(pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol']))
+                df_warmup = pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol'])
+                frames.append(df_warmup)
+                # Cache warmup candles too so base scans have full 2yr history
+                warmup_rows = [(symbol, int(r['date']), r['open'], r['high'], r['low'], r['close'], int(r['vol']))
+                               for _, r in df_warmup.iterrows()]
+                cursor.executemany("""
+                    INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (fyers_symbol, date) DO UPDATE SET
+                        open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                        close=EXCLUDED.close, vol=EXCLUDED.vol
+                """, warmup_rows)
+                conn.commit()
             frames.append(df)
             df_combined = pd.concat(frames).drop_duplicates(subset='date').sort_values('date').reset_index(drop=True)
 
