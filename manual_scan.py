@@ -28,6 +28,7 @@ def get_fyers():
 
 # --- 🛡️ THE ANTI-BAN ENGINE ---
 def fetch_safe(fyers_obj, payload):
+    time.sleep(1)  # 1 req/s hard limit — prevents Fyers rate limit (10 req/s but burst-sensitive)
     for attempt in range(3):
         res = fyers_obj.history(data=payload)
         if isinstance(res, dict):
