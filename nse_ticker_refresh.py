@@ -136,40 +136,51 @@ def main():
     conn.commit()
     print(f"      OK Upserted {total} | Removed {deleted} delisted | daily_ohlcv cache cleared")
 
-    # Step 3: Fetch classifications for all stocks
-    cur.execute("SELECT fyers_symbol FROM stocks ORDER BY fyers_symbol")
-    missing = cur.fetchall()
-    print(f"\n[3/3] Fetching classifications for all {len(missing)} stocks...")
+    # Step 3: Fetch classifications for all stocks, update only on change or blank
+    cur.execute("SELECT fyers_symbol, sector, industry, basic_industry FROM stocks ORDER BY fyers_symbol")
+    all_stocks = cur.fetchall()
+    print(f"\n[3/3] Fetching classifications for all {len(all_stocks)} stocks...")
 
     updated = 0
-    if missing:
-        for i, (fyers_sym,) in enumerate(missing):
-            base   = fyers_sym.split(":")[1].rsplit("-", 1)[0]
-            series = fyers_sym.split(":")[1].rsplit("-", 1)[-1]
+    unchanged = 0
+    no_data = 0
 
-            time.sleep(DELAY)
+    for i, (fyers_sym, db_sector, db_industry, db_basic) in enumerate(all_stocks):
+        base   = fyers_sym.split(":")[1].rsplit("-", 1)[0]
+        series = fyers_sym.split(":")[1].rsplit("-", 1)[-1]
+
+        time.sleep(DELAY)
+        data = fetch_classification(base, series)
+
+        if not data:
+            time.sleep(2)
             data = fetch_classification(base, series)
 
-            if not data:
-                time.sleep(2)
-                data = fetch_classification(base, series)
-
-            if data:
+        if data:
+            # Update only if blank or any field changed
+            is_blank  = not (db_sector or db_industry or db_basic)
+            is_changed = (data["sector"]         != (db_sector   or "") or
+                          data["industry"]        != (db_industry or "") or
+                          data["basic_industry"]  != (db_basic    or ""))
+            if is_blank or is_changed:
                 cur.execute("""
                     UPDATE stocks SET sector = %s, industry = %s, basic_industry = %s
                     WHERE fyers_symbol IN (%s, %s, %s, %s)
                 """, (data["sector"], data["industry"], data["basic_industry"],
                       f"NSE:{base}-EQ", f"NSE:{base}-BE", f"NSE:{base}-BZ", f"NSE:{base}-BL"))
                 updated += cur.rowcount
-                print(f"      [{i+1}/{len(missing)}] {fyers_sym} -> {data['sector']} / {data['industry']}")
+                tag = "NEW" if is_blank else "CHANGED"
+                print(f"      [{i+1}/{len(all_stocks)}] {fyers_sym} [{tag}] -> {data['sector']} / {data['industry']}")
             else:
-                print(f"      [{i+1}/{len(missing)}] {fyers_sym} -> no data on NSE")
+                unchanged += 1
+        else:
+            no_data += 1
 
-            if (i + 1) % 20 == 0:
-                conn.commit()
+        if (i + 1) % 20 == 0:
+            conn.commit()
 
-        conn.commit()
-        print(f"      OK {updated} rows updated with classifications")
+    conn.commit()
+    print(f"      OK {updated} updated | {unchanged} unchanged | {no_data} no data from NSE")
 
     cur.close()
     conn.close()
