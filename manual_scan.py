@@ -492,11 +492,79 @@ def run_daily_scan():
 
     flush_batch()
 
+    # --- RETRY PASS for failed stocks (sequential, one fresh Fyers instance) ---
+    if failed_stocks:
+        log_progress(cursor, conn, f"🔁 Retrying {len(failed_stocks)} failed stocks (sequential pass)...")
+        # Build symbol → (stock_id, db_daily_active, db_daily_date) lookup from original list
+        stock_lookup = {sym: (sid, act, dt) for sid, sym, act, dt in stocks}
+        retry_fyers  = get_fyers()
+        still_failed = []
+
+        time.sleep(5)  # brief pause before retry pass
+        for sym in tqdm(failed_stocks, desc="Retry pass"):
+            if sym not in stock_lookup:
+                still_failed.append(sym)
+                continue
+            sid, act, dt = stock_lookup[sym]
+            task = (sid, sym, act, dt)
+            try:
+                result = fetch_stock(task, retry_fyers)
+                if result.get("error") or result.get("skip"):
+                    still_failed.append(sym)
+                    continue
+
+                resolved = result["resolved_symbol"]
+                if resolved:
+                    cursor.execute("UPDATE stocks SET fyers_symbol = %s WHERE id = %s", (resolved, sid))
+                    conn.commit()
+                    log_progress(cursor, conn, f"✅ Series fixed on retry: {resolved}")
+
+                if result["ohlcv_rows"]:
+                    cursor.executemany("""
+                        INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (fyers_symbol, date) DO UPDATE SET
+                            open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                            close=EXCLUDED.close, vol=EXCLUDED.vol
+                    """, result["ohlcv_rows"])
+                    conn.commit()
+                if result["warmup_rows"]:
+                    cursor.executemany("""
+                        INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (fyers_symbol, date) DO UPDATE SET
+                            open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                            close=EXCLUDED.close, vol=EXCLUDED.vol
+                    """, result["warmup_rows"])
+                    conn.commit()
+
+                pending_updates.append((
+                    result["rs_val"], result["new_active"], result["new_date"],
+                    result["new_1h"], result["new_15m"], result["new_weekly_bullish"], sid,
+                ))
+                flush_batch()
+
+                if result["new_active"] == "Yes":
+                    log_progress(cursor, conn,
+                        f"🎯 {sym} (retry) → Daily: {result['new_date']} | 1H: {result['new_1h']} | 15M: {result['new_15m']}")
+
+            except Exception as e:
+                still_failed.append(sym)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                tqdm.write(f"❌ Retry failed for {sym}: {e}")
+
+        failed_stocks = still_failed
+
+    flush_batch()
+
     # --- FINAL SUMMARY ---
     fail_count = len(failed_stocks)
     if failed_stocks:
         ticker_names = ', '.join(s.split(':')[1] if ':' in s else s for s in failed_stocks)
-        log_progress(cursor, conn, f"⚠️ {fail_count}/{total} stock(s) failed: {ticker_names}")
+        log_progress(cursor, conn, f"⚠️ {fail_count}/{total} stock(s) still failed after retry: {ticker_names}")
     else:
         log_progress(cursor, conn, f"✅ All {total} stocks fetched successfully. No failures.")
 
