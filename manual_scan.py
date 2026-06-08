@@ -362,10 +362,11 @@ def run_daily_scan():
         threading.Thread(target=worker, daemon=True).start()
 
     # --- Main thread: collect results and write DB ---
-    failed_stocks  = []
+    failed_stocks   = []
     pending_updates = []
     all_ohlcv_rows  = []
-    BATCH_SIZE = 10
+    BATCH_SIZE        = 10
+    OHLCV_FLUSH_EVERY = 200  # flush daily_ohlcv every N stocks so partial runs still save data
 
     def flush_batch():
         if not pending_updates:
@@ -377,6 +378,19 @@ def run_daily_scan():
         """, pending_updates)
         conn.commit()
         pending_updates.clear()
+
+    def flush_ohlcv():
+        if not all_ohlcv_rows:
+            return
+        execute_values(cursor, """
+            INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
+            VALUES %s
+            ON CONFLICT (fyers_symbol, date) DO UPDATE SET
+                open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                close=EXCLUDED.close, vol=EXCLUDED.vol
+        """, all_ohlcv_rows, page_size=1000)
+        conn.commit()
+        all_ohlcv_rows.clear()
 
     total = len(stocks)
     pbar  = tqdm(total=total, desc="Scanning stocks")
@@ -411,33 +425,16 @@ def run_daily_scan():
                                  r["new_1h"], r["new_15m"], r["new_weekly_bullish"], r["stock_id"]))
         if len(pending_updates) >= BATCH_SIZE:
             flush_batch()
+        if done % OHLCV_FLUSH_EVERY == 0:
+            flush_ohlcv()
+            tqdm.write(f"💾 OHLCV flushed at {done}/{total} stocks")
         if r["new_active"] == "Yes":
             log_progress(cursor, conn, f"🎯 {sym} → Daily: {r['new_date']} | 1H: {r['new_1h']} | 15M: {r['new_15m']}")
 
     pbar.close()
     flush_batch()
-
-    # --- BULK INSERT daily_ohlcv ---
-    # Reconnect fresh — the scan loop runs for ~1hr and the Neon connection may have timed out
-    if all_ohlcv_rows:
-        try:
-            cursor.close()
-            conn.close()
-        except Exception:
-            pass
-        conn   = psycopg2.connect(NEON_URL)
-        cursor = conn.cursor()
-        from psycopg2.extras import execute_values
-        print(f"💾 Writing {len(all_ohlcv_rows)} OHLCV rows to daily_ohlcv cache...")
-        execute_values(cursor, """
-            INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
-            VALUES %s
-            ON CONFLICT (fyers_symbol, date) DO UPDATE SET
-                open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-                close=EXCLUDED.close, vol=EXCLUDED.vol
-        """, all_ohlcv_rows, page_size=1000)
-        conn.commit()
-        print("✅ daily_ohlcv cache updated")
+    flush_ohlcv()  # final flush for any remaining rows
+    print("✅ daily_ohlcv cache updated")
 
     # --- FINAL SUMMARY ---
     total      = len(stocks)
