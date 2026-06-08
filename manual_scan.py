@@ -11,7 +11,7 @@ from tqdm import tqdm
 import psycopg2
 from config import NEON_URL
 
-WORKERS = 5  # concurrent Fyers fetch threads — Fyers limit is 10 req/s; 5 workers stays safely under
+WORKERS = 3  # 3 workers + 150ms global throttle = ~6.6 req/s max — safe under Fyers 10 req/s limit
 
 CLIENT_ID = "QTKF8KZDM9-100"
 LOOKBACK_DAYS = 45
@@ -201,25 +201,36 @@ def run_daily_scan():
     # Priority order: EQ, BE, BZ first; then remaining equity series as fallback
     SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
 
-    # Shared rate-limit lock: only one thread may enter fetch_safe at a time when
-    # the 45s cooldown fires, preventing thundering-herd retries across workers.
-    rate_limit_lock = threading.Lock()
+    # Global request throttle: ensures all workers combined stay under Fyers 10 req/s limit.
+    # 150ms between requests = max ~6.6 req/s across all workers — safe headroom.
+    _last_request_time = [0.0]
+    _throttle_lock     = threading.Lock()
+    REQUEST_INTERVAL   = 0.15  # seconds between consecutive Fyers API calls globally
 
-    def fetch_safe_threadsafe(fyers_obj, payload):
-        """Thread-safe wrapper: serialises the 45s cooldown across all workers."""
+    def throttled_fetch(fyers_obj, payload):
+        """Rate-controlled fetch: spaces all requests ≥150ms apart globally, retries on limit."""
+        with _throttle_lock:
+            now  = time.monotonic()
+            wait = REQUEST_INTERVAL - (now - _last_request_time[0])
+            if wait > 0:
+                time.sleep(wait)
+            _last_request_time[0] = time.monotonic()
+
         for attempt in range(3):
             res = fyers_obj.history(data=payload)
             if isinstance(res, dict):
                 if res.get('s') == 'ok' and res.get('candles'):
                     return res
                 if 'limit' in str(res.get('message', '')).lower():
-                    with rate_limit_lock:
-                        tqdm.write("⏳ Fyers rate limit — cooling 45 s...")
-                        time.sleep(45)
+                    tqdm.write("⏳ Fyers rate limit — cooling 45 s...")
+                    time.sleep(45)
                     continue
             if attempt < 2:
                 time.sleep(3)
         return res
+
+    def fetch_safe_threadsafe(fyers_obj, payload):
+        return throttled_fetch(fyers_obj, payload)
 
     def fetch_stock(task, fyers_obj):
         """
