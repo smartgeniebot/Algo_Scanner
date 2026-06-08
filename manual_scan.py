@@ -366,7 +366,7 @@ def run_daily_scan():
     pending_updates = []
     all_ohlcv_rows  = []
     BATCH_SIZE        = 10
-    OHLCV_FLUSH_EVERY = 200  # flush daily_ohlcv every N stocks so partial runs still save data
+    OHLCV_FLUSH_EVERY = 50000  # flush daily_ohlcv every ~140 stocks worth of rows (364+365 rows each)
 
     def flush_batch():
         if not pending_updates:
@@ -442,7 +442,7 @@ def run_daily_scan():
                                  r["new_1h"], r["new_15m"], r["new_weekly_bullish"], r["stock_id"]))
         if len(pending_updates) >= BATCH_SIZE:
             flush_batch()
-        if done % OHLCV_FLUSH_EVERY == 0:
+        if len(all_ohlcv_rows) >= OHLCV_FLUSH_EVERY:
             flush_ohlcv(f"at {done}/{total} stocks")
         if r["new_active"] == "Yes":
             log_progress(cursor, conn, f"🎯 {sym} → Daily: {r['new_date']} | 1H: {r['new_1h']} | 15M: {r['new_15m']}")
