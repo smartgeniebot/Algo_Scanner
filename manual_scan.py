@@ -391,15 +391,17 @@ def run_daily_scan():
         if not all_ohlcv_rows:
             return
         try:
+            # Deduplicate by (fyers_symbol, date) — last value wins
+            deduped = list({(r[0], r[1]): r for r in all_ohlcv_rows}.values())
             execute_values(cursor, """
                 INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
                 VALUES %s
                 ON CONFLICT (fyers_symbol, date) DO UPDATE SET
                     open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
                     close=EXCLUDED.close, vol=EXCLUDED.vol
-            """, all_ohlcv_rows, page_size=1000)
+            """, deduped, page_size=1000)
             conn.commit()
-            tqdm.write(f"💾 OHLCV saved: {len(all_ohlcv_rows)} rows{' ' + label if label else ''}")
+            tqdm.write(f"💾 OHLCV saved: {len(deduped)} rows{' ' + label if label else ''}")
             all_ohlcv_rows.clear()
         except Exception as e:
             tqdm.write(f"❌ DB flush_ohlcv failed: {e} — {len(all_ohlcv_rows)} rows NOT saved")
