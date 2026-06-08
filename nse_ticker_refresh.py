@@ -23,19 +23,11 @@ BASE_HEADERS = {
 }
 
 
-def make_session():
-    session = requests.Session()
-    session.headers.update(BASE_HEADERS)
-    session.get("https://www.nseindia.com", headers={**BASE_HEADERS, "Accept": "text/html,*/*"}, timeout=15)
-    time.sleep(2)
-    return session
 
-
-def fetch_equity_list(session) -> list[dict]:
-    resp = session.get(
+def fetch_equity_list() -> list[dict]:
+    resp = requests.get(
         "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
-        headers={**BASE_HEADERS, "Accept": "text/html,*/*",
-                 "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading"},
+        headers={**BASE_HEADERS, "Accept": "text/html,*/*"},
         timeout=30,
     )
     resp.raise_for_status()
@@ -54,17 +46,13 @@ def fetch_equity_list(session) -> list[dict]:
     return stocks
 
 
-def fetch_classification(session, symbol, series):
+def fetch_classification(symbol, series):
     api_url = (f"https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
                f"?functionName=getSymbolData&marketType=N&series={series}&symbol={quote(symbol, safe='')}")
     try:
-        resp = session.get(api_url, headers={
-            **BASE_HEADERS,
-            "Accept": "application/json, text/plain, */*",
-            "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
+        resp = requests.get(api_url, headers={
+            "User-Agent": BASE_HEADERS["User-Agent"],
+            "Accept": "application/json",
         }, timeout=10)
         if resp.status_code == 200:
             eq = resp.json().get("equityResponse", [{}])
@@ -109,11 +97,9 @@ def main():
     print("NSE Ticker Refresh - Starting")
     print("=" * 60)
 
-    session = make_session()
-
     # Step 1: Download stock list
     print("\n[1/3] Fetching EQUITY_L.csv from NSE archives...")
-    stock_list = fetch_equity_list(session)
+    stock_list = fetch_equity_list()
     total = len(stock_list)
     print(f"      OK {total} stocks loaded")
 
@@ -164,12 +150,11 @@ def main():
             series = fyers_sym.split(":")[1].rsplit("-", 1)[-1]
 
             time.sleep(DELAY)
-            data = fetch_classification(session, base, series)
+            data = fetch_classification(base, series)
 
             if not data:
-                session = make_session()
-                time.sleep(1)
-                data = fetch_classification(session, base, series)
+                time.sleep(2)
+                data = fetch_classification(base, series)
 
             if data:
                 cur.execute("""

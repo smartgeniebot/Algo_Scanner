@@ -10,10 +10,9 @@ GitHub Actions will use this file to update the DB.
 import csv, io, json, time, requests
 from urllib.parse import quote
 
-DELAY         = 0.5
-BATCH_LOG     = 100
-OUTPUT        = "nse_classifications.json"
-SESSION_REFRESH = 300
+DELAY     = 0.5
+BATCH_LOG = 100
+OUTPUT    = "nse_classifications.json"
 
 BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -23,18 +22,10 @@ BASE_HEADERS = {
     "Connection": "keep-alive",
 }
 
-def make_session():
-    session = requests.Session()
-    session.headers.update(BASE_HEADERS)
-    session.get("https://www.nseindia.com", headers={**BASE_HEADERS, "Accept": "text/html,*/*"}, timeout=15)
-    time.sleep(2)
-    return session
-
-def fetch_equity_list(session):
-    resp = session.get(
+def fetch_equity_list():
+    resp = requests.get(
         "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
-        headers={**BASE_HEADERS, "Accept": "text/html,*/*",
-                 "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading"},
+        headers={**BASE_HEADERS, "Accept": "text/html,*/*"},
         timeout=30,
     )
     resp.raise_for_status()
@@ -48,17 +39,13 @@ def fetch_equity_list(session):
             stocks.append({"symbol": sym, "series": series})
     return stocks
 
-def fetch_one(session, symbol, series):
+def fetch_one(symbol, series):
     api_url = (f"https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
                f"?functionName=getSymbolData&marketType=N&series={series}&symbol={quote(symbol, safe='')}")
     try:
-        resp = session.get(api_url, headers={
-            **BASE_HEADERS,
-            "Accept": "application/json, text/plain, */*",
-            "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
+        resp = requests.get(api_url, headers={
+            "User-Agent": BASE_HEADERS["User-Agent"],
+            "Accept": "application/json",
         }, timeout=10)
         if resp.status_code == 200:
             eq = resp.json().get("equityResponse", [{}])
@@ -78,11 +65,8 @@ def main():
     print("NSE Classification Fetcher - Local Run")
     print("=" * 55)
 
-    session = make_session()
-    print("Session initialized")
-
     print("\n[1/2] Downloading stock list from NSE...")
-    stocks = fetch_equity_list(session)
+    stocks = fetch_equity_list()
     total  = len(stocks)
     print(f"      {total} symbols loaded")
 
@@ -106,12 +90,8 @@ def main():
             count += 1
             continue
 
-        if i > 0 and i % SESSION_REFRESH == 0:
-            print(f"      Refreshing session at {i}/{total}...")
-            session = make_session()
-
         time.sleep(DELAY)
-        data = fetch_one(session, symbol, series)
+        data = fetch_one(symbol, series)
         count += 1
 
         if data:

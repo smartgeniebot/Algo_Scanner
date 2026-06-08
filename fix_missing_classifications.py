@@ -8,39 +8,22 @@ Usage: python fix_missing_classifications.py
 import time
 import requests
 import psycopg2
+from urllib.parse import quote
 from config import NEON_URL
 
-BASE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-}
-
-def make_session():
-    session = requests.Session()
-    session.headers.update(BASE_HEADERS)
-    session.get("https://www.nseindia.com", headers={**BASE_HEADERS, "Accept": "text/html,*/*"}, timeout=15)
-    time.sleep(2)
-    return session
-
-def fetch_one(session, base, series):
+def fetch_one(symbol, series):
     api_url = (f"https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
-               f"?functionName=getSymbolData&marketType=N&series={series}&symbol={base}")
+               f"?functionName=getSymbolData&marketType=N&series={series}&symbol={quote(symbol, safe='')}")
     try:
-        resp = session.get(api_url, headers={
-            **BASE_HEADERS,
-            "Accept": "application/json, text/plain, */*",
-            "Referer": f"https://www.nseindia.com/get-quote/equity/{base}",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
+        resp = requests.get(api_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json",
         }, timeout=10)
         if resp.status_code == 200:
             eq = resp.json().get("equityResponse", [{}])
             if eq:
-                sec_info = eq[0].get("secInfo", {})
+                sec_info       = eq[0].get("secInfo", {})
                 sector         = sec_info.get("sector", "")
                 industry       = sec_info.get("industryInfo", "")
                 basic_industry = sec_info.get("basicIndustry", "")
@@ -70,7 +53,6 @@ def main():
         conn.close()
         return
 
-    session = make_session()
     results = {}
 
     for i, (fyers_sym, stock_name) in enumerate(symbols):
@@ -78,20 +60,17 @@ def main():
         series = fyers_sym.split(":")[1].rsplit("-", 1)[-1]
 
         time.sleep(0.5)
-        data = fetch_one(session, base, series)
+        data = fetch_one(base, series)
+
+        if not data:
+            time.sleep(2)
+            data = fetch_one(base, series)
 
         if data:
             results[base] = data
             print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> {data['sector']} / {data['industry']} / {data['basic_industry']}")
         else:
-            session = make_session()
-            time.sleep(1)
-            data = fetch_one(session, base, series)
-            if data:
-                results[base] = data
-                print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> {data['sector']} / {data['industry']} / {data['basic_industry']}")
-            else:
-                print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> no data")
+            print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> no data")
 
     print(f"\nUpdating DB for {len(results)} stocks...")
     updated = 0
