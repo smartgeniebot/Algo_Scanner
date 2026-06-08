@@ -92,9 +92,9 @@ def ensure_schema(cur):
     """)
 
 
-def main():
+def main(refresh_all=False):
     print("=" * 60)
-    print("NSE Ticker Refresh - Starting")
+    print("NSE Ticker Refresh - Starting" + (" (refresh ALL classifications)" if refresh_all else ""))
     print("=" * 60)
 
     # Step 1: Download stock list
@@ -136,10 +136,14 @@ def main():
     conn.commit()
     print(f"      OK Upserted {total} | Removed {deleted} delisted | daily_ohlcv cache cleared")
 
-    # Step 3: Fetch classifications for stocks missing sector
-    cur.execute("SELECT fyers_symbol FROM stocks WHERE sector IS NULL OR sector = '' ORDER BY fyers_symbol")
+    # Step 3: Fetch classifications
+    if refresh_all:
+        cur.execute("SELECT fyers_symbol FROM stocks ORDER BY fyers_symbol")
+    else:
+        cur.execute("SELECT fyers_symbol FROM stocks WHERE sector IS NULL OR sector = '' ORDER BY fyers_symbol")
     missing = cur.fetchall()
-    print(f"\n[3/3] Fetching classifications for {len(missing)} stocks missing sector...")
+    label = "all stocks" if refresh_all else f"{len(missing)} stocks missing sector"
+    print(f"\n[3/3] Fetching classifications for {label}...")
 
     if not missing:
         print("      OK All stocks already have classifications")
@@ -182,4 +186,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--refresh-all", action="store_true",
+                        help="Re-fetch classifications for ALL stocks, not just missing ones")
+    args = parser.parse_args()
+    main(refresh_all=args.refresh_all)
