@@ -1,6 +1,4 @@
 import time
-import queue
-import threading
 import requests
 import pandas as pd
 import pandas_ta_classic as ta
@@ -10,8 +8,6 @@ from datetime import date, datetime, timedelta, timezone
 from tqdm import tqdm
 import psycopg2
 from config import NEON_URL
-
-WORKERS = 3  # 3 workers + 150ms global throttle = ~6.6 req/s max — safe under Fyers 10 req/s limit
 
 CLIENT_ID = "QTKF8KZDM9-100"
 LOOKBACK_DAYS = 45
@@ -201,190 +197,7 @@ def run_daily_scan():
     # Priority order: EQ, BE, BZ first; then remaining equity series as fallback
     SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
 
-    # Global request throttle: ensures all workers combined stay under Fyers 10 req/s limit.
-    # 150ms between requests = max ~6.6 req/s across all workers — safe headroom.
-    _last_request_time = [0.0]
-    _throttle_lock     = threading.Lock()
-    REQUEST_INTERVAL   = 0.15  # seconds between consecutive Fyers API calls globally
-
-    def throttled_fetch(fyers_obj, payload):
-        """Rate-controlled fetch: spaces all requests ≥150ms apart globally, retries on limit."""
-        with _throttle_lock:
-            now  = time.monotonic()
-            wait = REQUEST_INTERVAL - (now - _last_request_time[0])
-            if wait > 0:
-                time.sleep(wait)
-            _last_request_time[0] = time.monotonic()
-
-        for attempt in range(3):
-            res = fyers_obj.history(data=payload)
-            if isinstance(res, dict):
-                if res.get('s') == 'ok' and res.get('candles'):
-                    return res
-                if 'limit' in str(res.get('message', '')).lower():
-                    tqdm.write("⏳ Fyers rate limit — cooling 45 s...")
-                    time.sleep(45)
-                    continue
-            if attempt < 2:
-                time.sleep(3)
-        return res
-
-    def fetch_safe_threadsafe(fyers_obj, payload):
-        return throttled_fetch(fyers_obj, payload)
-
-    def fetch_stock(task, fyers_obj):
-        """
-        Pure fetch + compute for one stock. No DB access.
-        Returns a result dict consumed by the main thread for DB writes.
-        """
-        stock_id, symbol, db_daily_active, db_daily_date = task
-        range_from = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
-        range_to   = today_ist.strftime("%Y-%m-%d")
-
-        res = fetch_safe_threadsafe(fyers_obj, {
-            "symbol": symbol, "resolution": "1D", "date_format": "1",
-            "range_from": range_from, "range_to": range_to, "cont_flag": "1",
-        })
-
-        # Series fallback
-        resolved_symbol = None
-        if not isinstance(res, dict) or "candles" not in res or not res["candles"]:
-            ticker_base    = symbol.rsplit("-", 1)[0]
-            current_series = symbol.rsplit("-", 1)[-1]
-            for series in [s for s in SERIES_PRIORITY if s != current_series]:
-                candidate = f"{ticker_base}-{series}"
-                tqdm.write(f"🔄 Series fallback: trying {candidate}")
-                fb = fetch_safe_threadsafe(fyers_obj, {
-                    "symbol": candidate, "resolution": "1D", "date_format": "1",
-                    "range_from": range_from, "range_to": range_to, "cont_flag": "1",
-                })
-                if isinstance(fb, dict) and "candles" in fb and fb["candles"]:
-                    res = fb
-                    resolved_symbol = candidate
-                    symbol = candidate
-                    break
-            else:
-                return {"error": True, "symbol": symbol, "stock_id": stock_id, "resolved_symbol": None}
-
-        df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
-        if len(df) < 56:
-            return {"skip": True, "symbol": symbol}
-
-        # Build OHLCV rows for main batch
-        ohlcv_rows = list(zip(
-            [symbol] * len(df),
-            df['date'].astype(int).tolist(),
-            df['open'].tolist(), df['high'].tolist(),
-            df['low'].tolist(), df['close'].tolist(),
-            df['vol'].astype(int).tolist()
-        ))
-
-        # RS score
-        bars = min(len(df), 56)
-        s_curr, s_past = df['close'].iloc[-1], df['close'].iloc[-bars]
-        n_curr, n_past = n_df['close'].iloc[-1], n_df['close'].iloc[-bars]
-        rs_val = float(round(((s_curr / s_past) / (n_curr / n_past)) - 1, 2))
-
-        # Weekly EMA is computed in the main thread after writing to daily_ohlcv,
-        # using the full 2yr history already in DB — no extra Fyers call needed.
-        warmup_rows = []
-
-        # Daily EMA crossover
-        df['E20'] = ta.ema(df['close'], 20)
-        df['E50'] = ta.ema(df['close'], 50)
-        df['P20'] = df['E20'].shift(1)
-        df['P50'] = df['E50'].shift(1)
-
-        new_active = "No"
-        new_date   = "--"
-        new_1h     = None
-        new_15m    = None
-
-        if df['E20'].iloc[-1] > df['E50'].iloc[-1]:
-            crosses = df[(df['E20'] > df['E50']) & (df['P20'] <= df['P50'])]
-            if not crosses.empty:
-                daily_cross_epoch = int(float(crosses['date'].iloc[-1]))
-                last_dt   = datetime.fromtimestamp(daily_cross_epoch, IST).date()
-                days_active = (today_ist - last_dt).days
-
-                if days_active <= LOOKBACK_DAYS:
-                    new_active = "Yes"
-                    new_date   = last_dt.strftime('%Y-%m-%d')
-
-                    fetch_days    = min(days_active + 25, 95)
-                    from_dt_intra = (today_ist - timedelta(days=fetch_days)).strftime("%Y-%m-%d")
-                    to_dt_intra   = today_ist.strftime("%Y-%m-%d")
-
-                    res_60 = fetch_safe_threadsafe(fyers_obj, {
-                        "symbol": symbol, "resolution": "60", "date_format": "1",
-                        "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1",
-                    })
-                    if isinstance(res_60, dict) and "candles" in res_60 and len(res_60["candles"]) >= 50:
-                        df60 = pd.DataFrame(res_60['candles'], columns=['date','open','high','low','close','vol'])
-                        df60['E20'], df60['E50'] = ta.ema(df60['close'], 20), ta.ema(df60['close'], 50)
-                        df60['P20'], df60['P50'] = df60['E20'].shift(1), df60['E50'].shift(1)
-                        c_60 = df60[(df60['E20'] < df60['E50']) & (df60['P20'] >= df60['P50'])]
-                        c_60 = c_60[c_60['date'] >= daily_cross_epoch]
-                        if not c_60.empty:
-                            new_1h = datetime.fromtimestamp(int(float(c_60['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
-
-                    res_15 = fetch_safe_threadsafe(fyers_obj, {
-                        "symbol": symbol, "resolution": "15", "date_format": "1",
-                        "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1",
-                    })
-                    if isinstance(res_15, dict) and "candles" in res_15 and len(res_15["candles"]) >= 50:
-                        df15 = pd.DataFrame(res_15['candles'], columns=['date','open','high','low','close','vol'])
-                        df15['E20'], df15['E50'] = ta.ema(df15['close'], 20), ta.ema(df15['close'], 50)
-                        df15['P20'], df15['P50'] = df15['E20'].shift(1), df15['E50'].shift(1)
-                        c_15 = df15[(df15['E20'] < df15['E50']) & (df15['P20'] >= df15['P50'])]
-                        c_15 = c_15[c_15['date'] >= daily_cross_epoch]
-                        if not c_15.empty:
-                            new_15m = datetime.fromtimestamp(int(float(c_15['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
-
-        return {
-            "stock_id":        stock_id,
-            "symbol":          symbol,
-            "resolved_symbol": resolved_symbol,
-            "ohlcv_rows":      ohlcv_rows,
-            "warmup_rows":     warmup_rows,
-            "rs_val":          rs_val,
-            "new_active":      new_active,
-            "new_date":        new_date,
-            "new_1h":          new_1h,
-            "new_15m":         new_15m,
-        }
-
-    # --- PARALLEL FETCH WITH WORKER THREADS ---
-    result_queue = queue.Queue()
-    task_queue   = queue.Queue()
-
-    for task in stocks:
-        task_queue.put(task)
-
-    def worker(worker_id):
-        fyers_obj = get_fyers()  # each worker owns its Fyers instance
-        while True:
-            try:
-                task = task_queue.get(timeout=2)
-            except queue.Empty:
-                break
-            try:
-                result = fetch_stock(task, fyers_obj)
-            except Exception as e:
-                result = {"error": True, "symbol": task[1], "stock_id": task[0],
-                          "resolved_symbol": None, "exc": str(e)}
-            result_queue.put(result)
-            task_queue.task_done()
-            time.sleep(0.05)  # tiny yield between tasks
-
-    threads = []
-    for w in range(WORKERS):
-        t = threading.Thread(target=worker, args=(w,), daemon=True)
-        t.start()
-        threads.append(t)
-
-    # Main thread: drain result_queue and write to DB
-    failed_stocks  = []
+    failed_stocks = []
     pending_updates = []
     BATCH_SIZE = 10
 
@@ -400,60 +213,73 @@ def run_daily_scan():
         conn.commit()
         pending_updates.clear()
 
-    completed = 0
-    total = len(stocks)
-    pbar = tqdm(total=total, desc="Scanning stocks")
-
-    while completed < total:
+    for stock_id, symbol, db_daily_active, db_daily_date in tqdm(stocks):
         try:
-            result = result_queue.get(timeout=120)
-        except queue.Empty:
-            # Workers may have crashed — break to avoid infinite wait
-            tqdm.write("⚠️ Result queue timeout — workers may have stalled")
-            break
+            range_from = (today_ist - timedelta(days=364)).strftime("%Y-%m-%d")
+            range_to   = today_ist.strftime("%Y-%m-%d")
 
-        completed += 1
-        pbar.update(1)
+            res = fetch_safe(fyers, {"symbol": symbol, "resolution": "1D", "date_format": "1",
+                                     "range_from": range_from, "range_to": range_to, "cont_flag": "1"})
 
-        if result.get("skip"):
-            continue
+            # Series fallback
+            if not isinstance(res, dict) or "candles" not in res or not res["candles"]:
+                ticker_base    = symbol.rsplit("-", 1)[0]
+                current_series = symbol.rsplit("-", 1)[-1]
+                resolved_symbol = None
+                for series in [s for s in SERIES_PRIORITY if s != current_series]:
+                    candidate = f"{ticker_base}-{series}"
+                    tqdm.write(f"🔄 Series fallback: trying {candidate} for {symbol}")
+                    fb = fetch_safe(fyers, {"symbol": candidate, "resolution": "1D", "date_format": "1",
+                                            "range_from": range_from, "range_to": range_to, "cont_flag": "1"})
+                    if isinstance(fb, dict) and "candles" in fb and fb["candles"]:
+                        res = fb
+                        resolved_symbol = candidate
+                        symbol = candidate
+                        break
 
-        if result.get("error"):
-            sym = result.get("symbol", "?")
-            exc = result.get("exc", "no data")
-            tqdm.write(f"❌ Error on {sym}: {exc}")
-            failed_stocks.append(sym)
-            continue
+                if resolved_symbol:
+                    flush_batch()
+                    cursor.execute("UPDATE stocks SET fyers_symbol = %s WHERE id = %s", (resolved_symbol, stock_id))
+                    conn.commit()
+                    log_progress(cursor, conn, f"✅ Series fixed: {resolved_symbol} saved to DB permanently")
+                else:
+                    log_progress(cursor, conn, f"❌ All series exhausted for {symbol}. Skipping.")
+                    failed_stocks.append(symbol)
+                    continue
 
-        sym        = result["symbol"]
-        stock_id   = result["stock_id"]
-        resolved   = result["resolved_symbol"]
+            df = pd.DataFrame(res['candles'], columns=['date','open','high','low','close','vol'])
+            if len(df) < 56:
+                continue
 
-        # Persist any series fix immediately (before batch flush)
-        if resolved:
-            flush_batch()
-            cursor.execute("UPDATE stocks SET fyers_symbol = %s WHERE id = %s", (resolved, stock_id))
-            conn.commit()
-            log_progress(cursor, conn, f"✅ Series fixed: {resolved} saved to DB permanently")
-
-        # Write OHLCV rows to cache table
-        if result["ohlcv_rows"]:
+            # Cache candles to daily_ohlcv for downstream jobs
+            ohlcv_rows = list(zip(
+                [symbol] * len(df),
+                df['date'].astype(int).tolist(),
+                df['open'].tolist(), df['high'].tolist(),
+                df['low'].tolist(), df['close'].tolist(),
+                df['vol'].astype(int).tolist()
+            ))
             cursor.executemany("""
                 INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (fyers_symbol, date) DO UPDATE SET
                     open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
                     close=EXCLUDED.close, vol=EXCLUDED.vol
-            """, result["ohlcv_rows"])
+            """, ohlcv_rows)
             conn.commit()
 
-        # Weekly EMA — read full 2yr history from daily_ohlcv (no extra Fyers call)
-        new_weekly_bullish = False
-        try:
+            # RS score
+            bars = min(len(df), 56)
+            s_curr, s_past = df['close'].iloc[-1], df['close'].iloc[-bars]
+            n_curr, n_past = n_df['close'].iloc[-1], n_df['close'].iloc[-bars]
+            rs_val = float(round(((s_curr / s_past) / (n_curr / n_past)) - 1, 2))
+
+            # Weekly EMA — read full accumulated history from daily_ohlcv (no extra Fyers call)
+            new_weekly_bullish = False
             cursor.execute("""
                 SELECT date, close FROM daily_ohlcv
                 WHERE fyers_symbol = %s ORDER BY date ASC
-            """, (sym,))
+            """, (symbol,))
             db_rows = cursor.fetchall()
             if db_rows:
                 df_db = pd.DataFrame(db_rows, columns=['date', 'close'])
@@ -462,110 +288,82 @@ def run_daily_scan():
                 dfw = df_db['close'].resample('W').last().dropna().reset_index(drop=True)
                 if len(dfw) >= 60:
                     new_weekly_bullish = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
-        except Exception:
-            pass
 
-        pending_updates.append((
-            result["rs_val"], result["new_active"], result["new_date"],
-            result["new_1h"], result["new_15m"], new_weekly_bullish,
-            stock_id,
-        ))
-        if len(pending_updates) >= BATCH_SIZE:
-            flush_batch()
+            # Daily EMA crossover
+            df['E20'] = ta.ema(df['close'], 20)
+            df['E50'] = ta.ema(df['close'], 50)
+            df['P20'] = df['E20'].shift(1)
+            df['P50'] = df['E50'].shift(1)
 
-        if result["new_active"] == "Yes":
-            log_progress(cursor, conn,
-                f"🎯 {sym} → Daily: {result['new_date']} | 1H: {result['new_1h']} | 15M: {result['new_15m']}")
+            new_active = "No"
+            new_date   = "--"
+            new_1h     = None
+            new_15m    = None
 
-    pbar.close()
+            if df['E20'].iloc[-1] > df['E50'].iloc[-1]:
+                crosses = df[(df['E20'] > df['E50']) & (df['P20'] <= df['P50'])]
+                if not crosses.empty:
+                    daily_cross_epoch = int(float(crosses['date'].iloc[-1]))
+                    last_dt     = datetime.fromtimestamp(daily_cross_epoch, IST).date()
+                    days_active = (today_ist - last_dt).days
 
-    # Wait for all worker threads to finish
-    for t in threads:
-        t.join(timeout=10)
+                    if days_active <= LOOKBACK_DAYS:
+                        new_active = "Yes"
+                        new_date   = last_dt.strftime('%Y-%m-%d')
 
-    flush_batch()
+                        fetch_days    = min(days_active + 25, 95)
+                        from_dt_intra = (today_ist - timedelta(days=fetch_days)).strftime("%Y-%m-%d")
+                        to_dt_intra   = today_ist.strftime("%Y-%m-%d")
 
-    # --- RETRY PASS for failed stocks (sequential, one fresh Fyers instance) ---
-    if failed_stocks:
-        log_progress(cursor, conn, f"🔁 Retrying {len(failed_stocks)} failed stocks (sequential pass)...")
-        # Build symbol → (stock_id, db_daily_active, db_daily_date) lookup from original list
-        stock_lookup = {sym: (sid, act, dt) for sid, sym, act, dt in stocks}
-        retry_fyers  = get_fyers()
-        still_failed = []
+                        res_60 = fetch_safe(fyers, {"symbol": symbol, "resolution": "60", "date_format": "1",
+                                                    "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
+                        if isinstance(res_60, dict) and "candles" in res_60 and len(res_60["candles"]) >= 50:
+                            df60 = pd.DataFrame(res_60['candles'], columns=['date','open','high','low','close','vol'])
+                            df60['E20'], df60['E50'] = ta.ema(df60['close'], 20), ta.ema(df60['close'], 50)
+                            df60['P20'], df60['P50'] = df60['E20'].shift(1), df60['E50'].shift(1)
+                            c_60 = df60[(df60['E20'] < df60['E50']) & (df60['P20'] >= df60['P50'])]
+                            c_60 = c_60[c_60['date'] >= daily_cross_epoch]
+                            if not c_60.empty:
+                                new_1h = datetime.fromtimestamp(int(float(c_60['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
 
-        time.sleep(5)  # brief pause before retry pass
-        for sym in tqdm(failed_stocks, desc="Retry pass"):
-            if sym not in stock_lookup:
-                still_failed.append(sym)
-                continue
-            sid, act, dt = stock_lookup[sym]
-            task = (sid, sym, act, dt)
-            try:
-                result = fetch_stock(task, retry_fyers)
-                if result.get("error") or result.get("skip"):
-                    still_failed.append(sym)
-                    continue
+                        res_15 = fetch_safe(fyers, {"symbol": symbol, "resolution": "15", "date_format": "1",
+                                                    "range_from": from_dt_intra, "range_to": to_dt_intra, "cont_flag": "1"})
+                        if isinstance(res_15, dict) and "candles" in res_15 and len(res_15["candles"]) >= 50:
+                            df15 = pd.DataFrame(res_15['candles'], columns=['date','open','high','low','close','vol'])
+                            df15['E20'], df15['E50'] = ta.ema(df15['close'], 20), ta.ema(df15['close'], 50)
+                            df15['P20'], df15['P50'] = df15['E20'].shift(1), df15['E50'].shift(1)
+                            c_15 = df15[(df15['E20'] < df15['E50']) & (df15['P20'] >= df15['P50'])]
+                            c_15 = c_15[c_15['date'] >= daily_cross_epoch]
+                            if not c_15.empty:
+                                new_15m = datetime.fromtimestamp(int(float(c_15['date'].iloc[0])), IST).strftime('%Y-%m-%d %H:%M')
 
-                resolved = result["resolved_symbol"]
-                if resolved:
-                    cursor.execute("UPDATE stocks SET fyers_symbol = %s WHERE id = %s", (resolved, sid))
-                    conn.commit()
-                    log_progress(cursor, conn, f"✅ Series fixed on retry: {resolved}")
-
-                if result["ohlcv_rows"]:
-                    cursor.executemany("""
-                        INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (fyers_symbol, date) DO UPDATE SET
-                            open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-                            close=EXCLUDED.close, vol=EXCLUDED.vol
-                    """, result["ohlcv_rows"])
-                    conn.commit()
-
-                retry_weekly = False
-                try:
-                    cursor.execute("""
-                        SELECT date, close FROM daily_ohlcv
-                        WHERE fyers_symbol = %s ORDER BY date ASC
-                    """, (sym,))
-                    db_rows = cursor.fetchall()
-                    if db_rows:
-                        df_db = pd.DataFrame(db_rows, columns=['date', 'close'])
-                        df_db['dt'] = pd.to_datetime(df_db['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
-                        df_db = df_db.set_index('dt')
-                        dfw = df_db['close'].resample('W').last().dropna().reset_index(drop=True)
-                        if len(dfw) >= 60:
-                            retry_weekly = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
-                except Exception:
-                    pass
-
-                pending_updates.append((
-                    result["rs_val"], result["new_active"], result["new_date"],
-                    result["new_1h"], result["new_15m"], retry_weekly, sid,
-                ))
+            pending_updates.append((rs_val, new_active, new_date, new_1h, new_15m, new_weekly_bullish, stock_id))
+            if len(pending_updates) >= BATCH_SIZE:
                 flush_batch()
 
-                if result["new_active"] == "Yes":
-                    log_progress(cursor, conn,
-                        f"🎯 {sym} (retry) → Daily: {result['new_date']} | 1H: {result['new_1h']} | 15M: {result['new_15m']}")
+            if new_active == "Yes":
+                log_progress(cursor, conn, f"🎯 {symbol} → Daily: {new_date} | 1H: {new_1h} | 15M: {new_15m}")
 
-            except Exception as e:
-                still_failed.append(sym)
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                tqdm.write(f"❌ Retry failed for {sym}: {e}")
+        except Exception as e:
+            log_progress(cursor, conn, f"❌ Error on {symbol}: {e}")
+            failed_stocks.append(symbol)
+            try:
+                conn.rollback()
+                pending_updates.clear()
+            except Exception:
+                pass
 
-        failed_stocks = still_failed
+        finally:
+            time.sleep(0.1)
 
     flush_batch()
 
     # --- FINAL SUMMARY ---
+    total      = len(stocks)
     fail_count = len(failed_stocks)
     if failed_stocks:
         ticker_names = ', '.join(s.split(':')[1] if ':' in s else s for s in failed_stocks)
-        log_progress(cursor, conn, f"⚠️ {fail_count}/{total} stock(s) still failed after retry: {ticker_names}")
+        log_progress(cursor, conn, f"⚠️ {fail_count}/{total} stock(s) failed: {ticker_names}")
     else:
         log_progress(cursor, conn, f"✅ All {total} stocks fetched successfully. No failures.")
 
