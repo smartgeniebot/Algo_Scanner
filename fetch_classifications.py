@@ -8,12 +8,12 @@ GitHub Actions will use this file to update the DB.
 """
 
 import csv, io, json, time, requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote
 
-WORKERS   = 10
-DELAY     = 0.2
-BATCH_LOG = 100
-OUTPUT    = "nse_classifications.json"
+DELAY      = 0.5   # seconds between requests (single thread)
+BATCH_LOG  = 100
+OUTPUT     = "nse_classifications.json"
+SESSION_REFRESH = 200  # refresh session every N requests
 
 BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -23,110 +23,125 @@ BASE_HEADERS = {
     "Connection": "keep-alive",
 }
 
+API_HEADERS = {
+    **BASE_HEADERS,
+    "Accept": "application/json, text/plain, */*",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+}
+
 def make_session():
     session = requests.Session()
     session.headers.update(BASE_HEADERS)
-    # Use a stock page to init the session cookie (homepage returns 403 from some IPs)
-    session.get("https://www.nseindia.com/get-quote/equity/RELIANCE", timeout=15)
+    # Visit two pages to properly initialize cookies
+    session.get("https://www.nseindia.com/market-data/securities-available-for-trading",
+                headers={**BASE_HEADERS, "Accept": "text/html,application/xhtml+xml,*/*"}, timeout=15)
+    time.sleep(1)
+    session.get("https://www.nseindia.com/get-quote/equity/RELIANCE",
+                headers={**BASE_HEADERS, "Accept": "text/html,application/xhtml+xml,*/*"}, timeout=15)
     time.sleep(2)
     return session
 
 def fetch_equity_list(session):
-    """Download the live stock list from NSE — same source as GitHub Actions.
-    This ensures fetch_classifications.py always works on the current official list,
-    regardless of what's in the DB."""
     resp = session.get(
         "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
-        headers={"Accept": "text/html,*/*",
+        headers={**BASE_HEADERS, "Accept": "text/html,*/*",
                  "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading"},
         timeout=30,
     )
     resp.raise_for_status()
-    # Extract unique symbols (one symbol can appear in multiple series e.g. EQ, BE)
     seen = set()
     symbols = []
     for row in csv.DictReader(io.StringIO(resp.text)):
-        sym = row.get("SYMBOL","").strip()
+        sym = row.get("SYMBOL", "").strip()
         if sym and sym not in seen:
             seen.add(sym)
             symbols.append(sym)
     return symbols
 
-# One shared session — works locally since browser cookies are valid
-_session = None
-
-def fetch_one(symbol):
-    global _session
+def fetch_one(session, symbol):
+    encoded = quote(symbol, safe="")
     try:
-        time.sleep(DELAY)
-        resp = _session.get(
-            f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
-            headers={
-                "Accept": "application/json, text/plain, */*",
-                "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}",
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-origin",
-            },
+        resp = session.get(
+            f"https://www.nseindia.com/api/quote-equity?symbol={encoded}",
+            headers={**API_HEADERS,
+                     "Referer": f"https://www.nseindia.com/get-quote/equity/{encoded}"},
             timeout=10,
         )
         if resp.status_code == 200:
             info = resp.json().get("industryInfo", {})
-            return {
-                "symbol": symbol,
-                "sector": info.get("sector", ""),
-                "industry": info.get("industry", ""),
-                "basic_industry": info.get("basicIndustry", ""),
-            }
-        elif resp.status_code in (401, 403):
-            # Refresh session on auth errors
-            _session = make_session()
+            sector         = info.get("sector", "")
+            industry       = info.get("industry", "")
+            basic_industry = info.get("basicIndustry", "")
+            if sector or industry or basic_industry:
+                return {"sector": sector, "industry": industry, "basic_industry": basic_industry}
+        return None
     except Exception:
-        pass
-    return {"symbol": symbol, "sector": "", "industry": "", "basic_industry": ""}
+        return None
 
 def main():
-    global _session
     print("=" * 55)
-    print("NSE Classification Fetcher — Local Run")
+    print("NSE Classification Fetcher - Local Run")
     print("=" * 55)
 
-    _session = make_session()
+    session = make_session()
+    print("Session initialized")
 
     print("\n[1/2] Downloading stock list from NSE...")
-    symbols = fetch_equity_list(_session)
+    symbols = fetch_equity_list(session)
     total   = len(symbols)
-    print(f"      ✅ {total} symbols loaded")
+    print(f"      {total} symbols loaded")
 
-    print(f"\n[2/2] Fetching sector, industry & basic_industry ({WORKERS} threads)...")
-    results    = {}
-    failed     = 0
-    done_count = 0
+    # Load existing results so we can resume if interrupted
+    try:
+        with open(OUTPUT, encoding="utf-8") as f:
+            results = json.load(f)
+        print(f"      Resuming — {len(results)} already classified")
+    except Exception:
+        results = {}
 
-    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-        futures = {executor.submit(fetch_one, sym): sym for sym in symbols}
-        for future in as_completed(futures):
-            done_count += 1
-            r = future.result()
-            if r["sector"] or r["industry"] or r["basic_industry"]:
-                results[r["symbol"]] = {
-                    "sector": r["sector"],
-                    "industry": r["industry"],
-                    "basic_industry": r["basic_industry"],
-                }
-            else:
-                failed += 1
-            if done_count % BATCH_LOG == 0 or done_count == total:
-                print(f"      ↳ {done_count}/{total} — {len(results)} classified, {failed} failed")
+    print(f"\n[2/2] Fetching classifications (single thread, {DELAY}s delay)...")
+    failed  = []
+    count   = 0
 
-    print(f"\n      ✅ {len(results)}/{total} classified")
+    for i, symbol in enumerate(symbols):
+        if symbol in results:
+            count += 1
+            continue  # already fetched in a previous run
 
-    with open(OUTPUT, "w") as f:
-        json.dump(results, f, indent=2)
+        # Refresh session periodically
+        if i > 0 and i % SESSION_REFRESH == 0:
+            print(f"      Refreshing session at {i}/{total}...")
+            session = make_session()
 
-    print(f"\n✅ Saved to {OUTPUT}")
-    print(f"   Next: git add {OUTPUT} && git commit -m 'update nse classifications' && git push")
-    print("   Then click 'Refresh NSE Tickers' on the site to sync to DB.")
+        time.sleep(DELAY)
+        data = fetch_one(session, symbol)
+        count += 1
+
+        if data:
+            results[symbol] = data
+        else:
+            failed.append(symbol)
+            # Retry once with a fresh session after consecutive failures
+            if len(failed) >= 5 and all(f in failed[-5:] for f in failed[-5:]):
+                print(f"      5 consecutive failures — refreshing session...")
+                session = make_session()
+                failed = []
+
+        if count % BATCH_LOG == 0 or count == total:
+            print(f"      {count}/{total} — {len(results)} classified, {len(failed)} failed this batch")
+            # Save progress after every batch so we can resume
+            with open(OUTPUT, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+
+    # Final save
+    with open(OUTPUT, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+    print(f"\nDone: {len(results)}/{total} classified")
+    print(f"Saved to {OUTPUT}")
+    print(f"Next: git add {OUTPUT} && git commit -m 'update nse classifications' && git push")
     print("=" * 55)
 
 if __name__ == "__main__":
