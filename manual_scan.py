@@ -198,8 +198,9 @@ def run_daily_scan():
     # Priority order: EQ, BE, BZ first; then remaining equity series as fallback
     SERIES_PRIORITY = ["EQ", "BE", "BZ", "BL", "BT", "SM", "ST"]
 
-    failed_stocks = []
+    failed_stocks  = []
     pending_updates = []
+    all_ohlcv_rows  = []  # accumulated across all stocks, bulk-inserted after the loop
     BATCH_SIZE = 10
 
     def flush_batch():
@@ -252,22 +253,14 @@ def run_daily_scan():
             if len(df) < 56:
                 continue
 
-            # Cache candles to daily_ohlcv for downstream jobs
-            ohlcv_rows = list(zip(
+            # Accumulate OHLCV rows for bulk insert after the scan loop
+            all_ohlcv_rows.extend(zip(
                 [symbol] * len(df),
                 df['date'].astype(int).tolist(),
                 df['open'].tolist(), df['high'].tolist(),
                 df['low'].tolist(), df['close'].tolist(),
                 df['vol'].astype(int).tolist()
             ))
-            cursor.executemany("""
-                INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (fyers_symbol, date) DO UPDATE SET
-                    open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-                    close=EXCLUDED.close, vol=EXCLUDED.vol
-            """, ohlcv_rows)
-            conn.commit()
 
             # RS score
             bars = min(len(df), 56)
@@ -352,6 +345,28 @@ def run_daily_scan():
             time.sleep(0.1)
 
     flush_batch()
+
+    # --- BULK INSERT daily_ohlcv ---
+    # Reconnect fresh — the scan loop runs for ~1hr and the Neon connection may have timed out
+    if all_ohlcv_rows:
+        try:
+            cursor.close()
+            conn.close()
+        except Exception:
+            pass
+        conn   = psycopg2.connect(NEON_URL)
+        cursor = conn.cursor()
+        from psycopg2.extras import execute_values
+        print(f"💾 Writing {len(all_ohlcv_rows)} OHLCV rows to daily_ohlcv cache...")
+        execute_values(cursor, """
+            INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
+            VALUES %s
+            ON CONFLICT (fyers_symbol, date) DO UPDATE SET
+                open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                close=EXCLUDED.close, vol=EXCLUDED.vol
+        """, all_ohlcv_rows, page_size=1000)
+        conn.commit()
+        print("✅ daily_ohlcv cache updated")
 
     # --- FINAL SUMMARY ---
     total      = len(stocks)
