@@ -1,39 +1,42 @@
 """
 NSE Ticker Refresh — runs via GitHub Actions.
-1. Downloads EQUITY_L.csv from NSE archives (GitHub IPs not blocked for this).
+1. Downloads EQUITY_L.csv from NSE archives.
 2. Upserts all stocks into Neon DB, deletes delisted ones.
-3. Reads sector, industry & basic_industry from nse_classifications.json (committed to repo).
-4. Updates classifications in Neon DB.
-
-nse_classifications.json is generated locally by fetch_classifications.py
-and committed to the repo. Run that script once a month before pushing.
+3. Clears daily_ohlcv cache.
+4. Fetches sector/industry/basic_industry for stocks missing classifications
+   using NSE GetQuoteApi (works from GitHub Actions, no browser session needed).
 """
 
-import csv, io, json, os
-import psycopg2
+import csv, io, os, time, requests, psycopg2
 from psycopg2.extras import execute_values
+from urllib.parse import quote
 
 NEON_URL = os.environ["NEON_URL"]
+DELAY    = 0.5
 
 BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,*/*",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate",
-    "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading",
+    "Connection": "keep-alive",
 }
 
 
-def fetch_equity_list() -> list[dict]:
-    import requests, time
+def make_session():
     session = requests.Session()
     session.headers.update(BASE_HEADERS)
-    session.get("https://www.nseindia.com/get-quote/equity/RELIANCE", timeout=15)
+    session.get("https://www.nseindia.com", headers={**BASE_HEADERS, "Accept": "text/html,*/*"}, timeout=15)
     time.sleep(2)
+    return session
+
+
+def fetch_equity_list(session) -> list[dict]:
     resp = session.get(
         "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
-        headers=BASE_HEADERS, timeout=30,
+        headers={**BASE_HEADERS, "Accept": "text/html,*/*",
+                 "Referer": "https://www.nseindia.com/market-data/securities-available-for-trading"},
+        timeout=30,
     )
     resp.raise_for_status()
     stocks = []
@@ -49,6 +52,32 @@ def fetch_equity_list() -> list[dict]:
                 "fyers_symbol": f"NSE:{symbol}-{series}",
             })
     return stocks
+
+
+def fetch_classification(session, symbol, series):
+    api_url = (f"https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
+               f"?functionName=getSymbolData&marketType=N&series={series}&symbol={quote(symbol, safe='')}")
+    try:
+        resp = session.get(api_url, headers={
+            **BASE_HEADERS,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"https://www.nseindia.com/get-quote/equity/{symbol}",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+        }, timeout=10)
+        if resp.status_code == 200:
+            eq = resp.json().get("equityResponse", [{}])
+            if eq:
+                sec_info       = eq[0].get("secInfo", {})
+                sector         = sec_info.get("sector", "")
+                industry       = sec_info.get("industryInfo", "")
+                basic_industry = sec_info.get("basicIndustry", "")
+                if sector or industry or basic_industry:
+                    return {"sector": sector, "industry": industry, "basic_industry": basic_industry}
+        return None
+    except Exception:
+        return None
 
 
 def ensure_schema(cur):
@@ -77,12 +106,14 @@ def ensure_schema(cur):
 
 def main():
     print("=" * 60)
-    print("NSE Ticker Refresh — Starting")
+    print("NSE Ticker Refresh - Starting")
     print("=" * 60)
+
+    session = make_session()
 
     # Step 1: Download stock list
     print("\n[1/3] Fetching EQUITY_L.csv from NSE archives...")
-    stock_list = fetch_equity_list()
+    stock_list = fetch_equity_list(session)
     total = len(stock_list)
     print(f"      OK {total} stocks loaded")
 
@@ -109,7 +140,6 @@ def main():
     cur.execute("DELETE FROM stocks WHERE fyers_symbol NOT IN (SELECT fyers_symbol FROM _nse_fresh)")
     deleted = cur.rowcount
 
-    # Clear OHLCV cache so next market_engine run rebuilds it fresh with current stock list
     cur.execute("""
         DO $$ BEGIN
             IF EXISTS (SELECT FROM pg_tables WHERE tablename = 'daily_ohlcv') THEN
@@ -120,28 +150,43 @@ def main():
     conn.commit()
     print(f"      OK Upserted {total} | Removed {deleted} delisted | daily_ohlcv cache cleared")
 
-    # Step 3: Apply classifications from JSON
-    print("\n[3/3] Applying sector, industry & basic_industry from nse_classifications.json...")
-    json_path = os.path.join(os.path.dirname(__file__), "nse_classifications.json")
+    # Step 3: Fetch classifications for stocks missing sector
+    cur.execute("SELECT fyers_symbol FROM stocks WHERE sector IS NULL OR sector = '' ORDER BY fyers_symbol")
+    missing = cur.fetchall()
+    print(f"\n[3/3] Fetching classifications for {len(missing)} stocks missing sector...")
 
-    if not os.path.exists(json_path) or os.path.getsize(json_path) <= 2:
-        print("      WARNING: nse_classifications.json not found or empty — skipping classification update.")
-        print("      Run fetch_classifications.py locally and commit the file.")
+    if not missing:
+        print("      OK All stocks already have classifications")
     else:
-        with open(json_path, encoding="utf-8") as f:
-            classifications = json.load(f)
-
         updated = 0
-        for sym, info in classifications.items():
-            cur.execute("""
-                UPDATE stocks SET sector = %s, industry = %s, basic_industry = %s
-                WHERE fyers_symbol IN (%s, %s, %s)
-            """, (info.get("sector", ""), info.get("industry", ""), info.get("basic_industry", ""),
-                  f"NSE:{sym}-EQ", f"NSE:{sym}-BE", f"NSE:{sym}-BZ"))
-            updated += cur.rowcount
+        for i, (fyers_sym,) in enumerate(missing):
+            base   = fyers_sym.split(":")[1].rsplit("-", 1)[0]
+            series = fyers_sym.split(":")[1].rsplit("-", 1)[-1]
+
+            time.sleep(DELAY)
+            data = fetch_classification(session, base, series)
+
+            if not data:
+                session = make_session()
+                time.sleep(1)
+                data = fetch_classification(session, base, series)
+
+            if data:
+                cur.execute("""
+                    UPDATE stocks SET sector = %s, industry = %s, basic_industry = %s
+                    WHERE fyers_symbol IN (%s, %s, %s, %s)
+                """, (data["sector"], data["industry"], data["basic_industry"],
+                      f"NSE:{base}-EQ", f"NSE:{base}-BE", f"NSE:{base}-BZ", f"NSE:{base}-BL"))
+                updated += cur.rowcount
+                print(f"      [{i+1}/{len(missing)}] {fyers_sym} -> {data['sector']} / {data['industry']}")
+            else:
+                print(f"      [{i+1}/{len(missing)}] {fyers_sym} -> no data on NSE")
+
+            if (i + 1) % 20 == 0:
+                conn.commit()
 
         conn.commit()
-        print(f"      OK {updated} rows updated with sector, industry & basic_industry")
+        print(f"      OK {updated} rows updated with classifications")
 
     cur.close()
     conn.close()
