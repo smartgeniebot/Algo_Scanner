@@ -285,35 +285,9 @@ def run_daily_scan():
         n_curr, n_past = n_df['close'].iloc[-1], n_df['close'].iloc[-bars]
         rs_val = float(round(((s_curr / s_past) / (n_curr / n_past)) - 1, 2))
 
-        # Weekly EMA — fetch warmup batch (days 730-365) for 2yr combined history
-        warmup_from = (today_ist - timedelta(days=730)).strftime("%Y-%m-%d")
-        warmup_to   = (today_ist - timedelta(days=365)).strftime("%Y-%m-%d")
-        res_w = fetch_safe_threadsafe(fyers_obj, {
-            "symbol": symbol, "resolution": "1D", "date_format": "1",
-            "range_from": warmup_from, "range_to": warmup_to, "cont_flag": "1",
-        })
+        # Weekly EMA is computed in the main thread after writing to daily_ohlcv,
+        # using the full 2yr history already in DB — no extra Fyers call needed.
         warmup_rows = []
-        frames = []
-        if isinstance(res_w, dict) and "candles" in res_w and res_w["candles"]:
-            df_warmup = pd.DataFrame(res_w['candles'], columns=['date','open','high','low','close','vol'])
-            frames.append(df_warmup)
-            warmup_rows = list(zip(
-                [symbol] * len(df_warmup),
-                df_warmup['date'].astype(int).tolist(),
-                df_warmup['open'].tolist(), df_warmup['high'].tolist(),
-                df_warmup['low'].tolist(), df_warmup['close'].tolist(),
-                df_warmup['vol'].astype(int).tolist()
-            ))
-        frames.append(df)
-        df_combined = pd.concat(frames).drop_duplicates(subset='date').sort_values('date').reset_index(drop=True)
-
-        df_dt = df_combined.copy()
-        df_dt['dt'] = pd.to_datetime(df_dt['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
-        df_dt = df_dt.set_index('dt')
-        dfw = df_dt['close'].resample('W').last().dropna().reset_index(drop=True)
-        new_weekly_bullish = False
-        if len(dfw) >= 60:
-            new_weekly_bullish = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
 
         # Daily EMA crossover
         df['E20'] = ta.ema(df['close'], 20)
@@ -378,7 +352,6 @@ def run_daily_scan():
             "new_date":        new_date,
             "new_1h":          new_1h,
             "new_15m":         new_15m,
-            "new_weekly_bullish": new_weekly_bullish,
         }
 
     # --- PARALLEL FETCH WITH WORKER THREADS ---
@@ -473,19 +446,28 @@ def run_daily_scan():
                     close=EXCLUDED.close, vol=EXCLUDED.vol
             """, result["ohlcv_rows"])
             conn.commit()
-        if result["warmup_rows"]:
-            cursor.executemany("""
-                INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (fyers_symbol, date) DO UPDATE SET
-                    open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-                    close=EXCLUDED.close, vol=EXCLUDED.vol
-            """, result["warmup_rows"])
-            conn.commit()
+
+        # Weekly EMA — read full 2yr history from daily_ohlcv (no extra Fyers call)
+        new_weekly_bullish = False
+        try:
+            cursor.execute("""
+                SELECT date, close FROM daily_ohlcv
+                WHERE fyers_symbol = %s ORDER BY date ASC
+            """, (sym,))
+            db_rows = cursor.fetchall()
+            if db_rows:
+                df_db = pd.DataFrame(db_rows, columns=['date', 'close'])
+                df_db['dt'] = pd.to_datetime(df_db['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
+                df_db = df_db.set_index('dt')
+                dfw = df_db['close'].resample('W').last().dropna().reset_index(drop=True)
+                if len(dfw) >= 60:
+                    new_weekly_bullish = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
+        except Exception:
+            pass
 
         pending_updates.append((
             result["rs_val"], result["new_active"], result["new_date"],
-            result["new_1h"], result["new_15m"], result["new_weekly_bullish"],
+            result["new_1h"], result["new_15m"], new_weekly_bullish,
             stock_id,
         ))
         if len(pending_updates) >= BATCH_SIZE:
@@ -539,19 +521,27 @@ def run_daily_scan():
                             close=EXCLUDED.close, vol=EXCLUDED.vol
                     """, result["ohlcv_rows"])
                     conn.commit()
-                if result["warmup_rows"]:
-                    cursor.executemany("""
-                        INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (fyers_symbol, date) DO UPDATE SET
-                            open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-                            close=EXCLUDED.close, vol=EXCLUDED.vol
-                    """, result["warmup_rows"])
-                    conn.commit()
+
+                retry_weekly = False
+                try:
+                    cursor.execute("""
+                        SELECT date, close FROM daily_ohlcv
+                        WHERE fyers_symbol = %s ORDER BY date ASC
+                    """, (sym,))
+                    db_rows = cursor.fetchall()
+                    if db_rows:
+                        df_db = pd.DataFrame(db_rows, columns=['date', 'close'])
+                        df_db['dt'] = pd.to_datetime(df_db['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
+                        df_db = df_db.set_index('dt')
+                        dfw = df_db['close'].resample('W').last().dropna().reset_index(drop=True)
+                        if len(dfw) >= 60:
+                            retry_weekly = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
+                except Exception:
+                    pass
 
                 pending_updates.append((
                     result["rs_val"], result["new_active"], result["new_date"],
-                    result["new_1h"], result["new_15m"], result["new_weekly_bullish"], sid,
+                    result["new_1h"], result["new_15m"], retry_weekly, sid,
                 ))
                 flush_batch()
 
