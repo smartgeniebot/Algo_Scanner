@@ -275,20 +275,14 @@ def run_daily_scan():
             n_curr, n_past = n_df['close'].iloc[-1], n_df['close'].iloc[-bars]
             rs_val = float(round(((s_curr / s_past) / (n_curr / n_past)) - 1, 2))
 
-            # Weekly EMA — read full accumulated history from daily_ohlcv (no extra Fyers call)
+            # Weekly EMA — use the 364-day df already in memory (52 weekly bars, no extra DB/Fyers call)
             new_weekly_bullish = False
-            cursor.execute("""
-                SELECT date, close FROM daily_ohlcv
-                WHERE fyers_symbol = %s ORDER BY date ASC
-            """, (symbol,))
-            db_rows = cursor.fetchall()
-            if db_rows:
-                df_db = pd.DataFrame(db_rows, columns=['date', 'close'])
-                df_db['dt'] = pd.to_datetime(df_db['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
-                df_db = df_db.set_index('dt')
-                dfw = df_db['close'].resample('W').last().dropna().reset_index(drop=True)
-                if len(dfw) >= 60:
-                    new_weekly_bullish = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
+            df_dt = df.copy()
+            df_dt['dt'] = pd.to_datetime(df_dt['date'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
+            df_dt = df_dt.set_index('dt')
+            dfw = df_dt['close'].resample('W').last().dropna().reset_index(drop=True)
+            if len(dfw) >= 52:
+                new_weekly_bullish = bool(ta.ema(dfw, 20).iloc[-1] > ta.ema(dfw, 50).iloc[-1])
 
             # Daily EMA crossover
             df['E20'] = ta.ema(df['close'], 20)
