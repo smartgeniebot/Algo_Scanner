@@ -28,17 +28,17 @@ def get_fyers():
 
 # --- 🛡️ THE ANTI-BAN ENGINE ---
 def fetch_safe(fyers_obj, payload):
-    time.sleep(1)  # 1 req/s hard limit — prevents Fyers rate limit (10 req/s but burst-sensitive)
     for attempt in range(3):
         res = fyers_obj.history(data=payload)
         if isinstance(res, dict):
             if res.get('s') == 'ok' and res.get('candles'):
                 return res
-            if 'limit' in str(res.get('message', '')).lower():
-                tqdm.write("⏳ Fyers Speed Limit Hit! Cooling down for 45 seconds...")
+            msg = str(res.get('message', ''))
+            tqdm.write(f"⚠️ Fyers non-ok response: {res}")
+            if 'limit' in msg.lower():
+                tqdm.write("⏳ Fyers rate limit — cooling 45s...")
                 time.sleep(45)
                 continue
-        # Transient empty/error — short backoff before retry
         if attempt < 2:
             time.sleep(3)
     return res
