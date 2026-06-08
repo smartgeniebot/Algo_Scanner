@@ -1,32 +1,67 @@
 """
-Uses Playwright (real browser) to fetch sector/industry/basic_industry
-from NSE for stocks missing classifications in the DB.
+Fetch sector/industry/basic_industry from NSE GetQuoteApi for stocks
+missing classifications in the DB.
 
-Usage:
-  pip install playwright
-  playwright install chromium
-  python fix_missing_classifications.py
+Usage: python fix_missing_classifications.py
 """
 
 import time
-import asyncio
+import requests
 import psycopg2
-from playwright.async_api import async_playwright
 from config import NEON_URL
 
-async def main():
+BASE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+}
+
+def make_session():
+    session = requests.Session()
+    session.headers.update(BASE_HEADERS)
+    session.get("https://www.nseindia.com", headers={**BASE_HEADERS, "Accept": "text/html,*/*"}, timeout=15)
+    time.sleep(2)
+    return session
+
+def fetch_one(session, base, series):
+    api_url = (f"https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
+               f"?functionName=getSymbolData&marketType=N&series={series}&symbol={base}")
+    try:
+        resp = session.get(api_url, headers={
+            **BASE_HEADERS,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"https://www.nseindia.com/get-quote/equity/{base}",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+        }, timeout=10)
+        if resp.status_code == 200:
+            eq = resp.json().get("equityResponse", [{}])
+            if eq:
+                sec_info = eq[0].get("secInfo", {})
+                sector         = sec_info.get("sector", "")
+                industry       = sec_info.get("industryInfo", "")
+                basic_industry = sec_info.get("basicIndustry", "")
+                if sector or industry or basic_industry:
+                    return {"sector": sector, "industry": industry, "basic_industry": basic_industry}
+        return None
+    except Exception:
+        return None
+
+def main():
     conn = psycopg2.connect(NEON_URL)
     cur  = conn.cursor()
 
-    # Fetch stocks missing sector
     cur.execute("""
-        SELECT DISTINCT fyers_symbol
+        SELECT DISTINCT fyers_symbol, stock_name
         FROM stocks
         WHERE sector IS NULL OR sector = ''
         ORDER BY fyers_symbol
     """)
-    rows = cur.fetchall()
-    symbols = [r[0] for r in rows]
+    rows    = cur.fetchall()
+    symbols = [(r[0], r[1] or '') for r in rows]
     print(f"Found {len(symbols)} stocks missing sector classification")
 
     if not symbols:
@@ -35,66 +70,29 @@ async def main():
         conn.close()
         return
 
+    session = make_session()
     results = {}
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
-        page = await context.new_page()
+    for i, (fyers_sym, stock_name) in enumerate(symbols):
+        base   = fyers_sym.split(":")[1].rsplit("-", 1)[0]
+        series = fyers_sym.split(":")[1].rsplit("-", 1)[-1]
 
-        # Initialize session by visiting NSE
-        print("Initializing NSE session...")
-        await page.goto("https://www.nseindia.com/get-quote/equity/RELIANCE", wait_until="networkidle")
-        await asyncio.sleep(3)
+        time.sleep(0.5)
+        data = fetch_one(session, base, series)
 
-        for i, fyers_sym in enumerate(symbols):
-            # Extract base symbol e.g. NSE:GENSOL-BZ -> GENSOL
-            base = fyers_sym.split(":")[1].rsplit("-", 1)[0]
-            url  = f"https://www.nseindia.com/api/quote-equity?symbol={base}"
+        if data:
+            results[base] = data
+            print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> {data['sector']} / {data['industry']} / {data['basic_industry']}")
+        else:
+            session = make_session()
+            time.sleep(1)
+            data = fetch_one(session, base, series)
+            if data:
+                results[base] = data
+                print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> {data['sector']} / {data['industry']} / {data['basic_industry']}")
+            else:
+                print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> no data")
 
-            try:
-                resp = await page.evaluate(f"""
-                    async () => {{
-                        const r = await fetch("{url}", {{
-                            headers: {{
-                                "Accept": "application/json",
-                                "Referer": "https://www.nseindia.com/get-quote/equity/{base}"
-                            }}
-                        }});
-                        return r.ok ? r.json() : null;
-                    }}
-                """)
-
-                if resp and resp.get("industryInfo"):
-                    info = resp["industryInfo"]
-                    sector         = info.get("sector", "")
-                    industry       = info.get("industry", "")
-                    basic_industry = info.get("basicIndustry", "")
-                    if sector or industry or basic_industry:
-                        results[base] = {"sector": sector, "industry": industry, "basic_industry": basic_industry}
-                        print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> {sector} / {industry} / {basic_industry}")
-                    else:
-                        print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> no industryInfo data")
-                else:
-                    print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> null response")
-
-                # Refresh session every 50 stocks
-                if (i + 1) % 50 == 0:
-                    print("  Refreshing session...")
-                    await page.goto("https://www.nseindia.com/get-quote/equity/RELIANCE", wait_until="networkidle")
-                    await asyncio.sleep(3)
-
-            except Exception as e:
-                print(f"  [{i+1}/{len(symbols)}] {fyers_sym} -> ERROR: {e}")
-
-            await asyncio.sleep(0.5)
-
-        await browser.close()
-
-    # Write to DB
     print(f"\nUpdating DB for {len(results)} stocks...")
     updated = 0
     for base, info in results.items():
@@ -108,13 +106,11 @@ async def main():
     conn.commit()
     print(f"Updated {updated} rows in DB")
 
-    # Show remaining missing
     cur.execute("SELECT COUNT(*) FROM stocks WHERE sector IS NULL OR sector = ''")
-    still_missing = cur.fetchone()[0]
-    print(f"Still missing sector: {still_missing}")
+    print(f"Still missing sector: {cur.fetchone()[0]}")
 
     cur.close()
     conn.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
