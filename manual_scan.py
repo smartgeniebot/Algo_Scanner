@@ -371,26 +371,42 @@ def run_daily_scan():
     def flush_batch():
         if not pending_updates:
             return
-        cursor.executemany("""
-            UPDATE stocks SET rs_score=%s, daily_cross_active=%s, daily_cross_date=%s,
-                first_1h_cross_time=%s, first_15m_cross_time=%s, weekly_ema_bullish=%s
-            WHERE id=%s
-        """, pending_updates)
-        conn.commit()
-        pending_updates.clear()
+        try:
+            cursor.executemany("""
+                UPDATE stocks SET rs_score=%s, daily_cross_active=%s, daily_cross_date=%s,
+                    first_1h_cross_time=%s, first_15m_cross_time=%s, weekly_ema_bullish=%s
+                WHERE id=%s
+            """, pending_updates)
+            conn.commit()
+            pending_updates.clear()
+        except Exception as e:
+            tqdm.write(f"❌ DB flush_batch failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            pending_updates.clear()
 
-    def flush_ohlcv():
+    def flush_ohlcv(label=""):
         if not all_ohlcv_rows:
             return
-        execute_values(cursor, """
-            INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
-            VALUES %s
-            ON CONFLICT (fyers_symbol, date) DO UPDATE SET
-                open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-                close=EXCLUDED.close, vol=EXCLUDED.vol
-        """, all_ohlcv_rows, page_size=1000)
-        conn.commit()
-        all_ohlcv_rows.clear()
+        try:
+            execute_values(cursor, """
+                INSERT INTO daily_ohlcv (fyers_symbol, date, open, high, low, close, vol)
+                VALUES %s
+                ON CONFLICT (fyers_symbol, date) DO UPDATE SET
+                    open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                    close=EXCLUDED.close, vol=EXCLUDED.vol
+            """, all_ohlcv_rows, page_size=1000)
+            conn.commit()
+            tqdm.write(f"💾 OHLCV saved: {len(all_ohlcv_rows)} rows{' ' + label if label else ''}")
+            all_ohlcv_rows.clear()
+        except Exception as e:
+            tqdm.write(f"❌ DB flush_ohlcv failed: {e} — {len(all_ohlcv_rows)} rows NOT saved")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     total = len(stocks)
     pbar  = tqdm(total=total, desc="Scanning stocks")
@@ -405,9 +421,10 @@ def run_daily_scan():
         pbar.update(1)
 
         if r.get("skip"):
+            tqdm.write(f"⚠️ Skipped {r.get('symbol','?')} — insufficient candles (<56 bars)")
             continue
         if r.get("error"):
-            tqdm.write(f"❌ {r.get('symbol','?')}: {r.get('exc','no data')}")
+            tqdm.write(f"❌ Fetch failed {r.get('symbol','?')}: {r.get('exc', 'all series exhausted')}")
             failed_stocks.append(r.get("symbol","?"))
             continue
 
@@ -426,8 +443,7 @@ def run_daily_scan():
         if len(pending_updates) >= BATCH_SIZE:
             flush_batch()
         if done % OHLCV_FLUSH_EVERY == 0:
-            flush_ohlcv()
-            tqdm.write(f"💾 OHLCV flushed at {done}/{total} stocks")
+            flush_ohlcv(f"at {done}/{total} stocks")
         if r["new_active"] == "Yes":
             log_progress(cursor, conn, f"🎯 {sym} → Daily: {r['new_date']} | 1H: {r['new_1h']} | 15M: {r['new_15m']}")
 
