@@ -3,8 +3,8 @@ NSE Ticker Refresh — runs via GitHub Actions.
 1. Downloads EQUITY_L.csv from NSE archives.
 2. Upserts all stocks into Neon DB, deletes delisted ones.
 3. Clears daily_ohlcv cache.
-4. Fetches sector/industry/basic_industry for stocks missing classifications
-   using NSE GetQuoteApi (works from GitHub Actions, no browser session needed).
+4. Fetches sector/industry/basic_industry for all stocks from NSE GetQuoteApi.
+   Updates DB only when classification changed or blank (delta update).
 """
 
 import csv, io, os, time, requests, psycopg2
@@ -22,6 +22,14 @@ BASE_HEADERS = {
     "Connection": "keep-alive",
 }
 
+
+def log(cur, conn, msg):
+    print(msg)
+    try:
+        cur.execute("INSERT INTO job_progress (job, line) VALUES (%s, %s)", ("nse_refresh", msg))
+        conn.commit()
+    except Exception:
+        pass
 
 
 def fetch_equity_list() -> list[dict]:
@@ -93,23 +101,22 @@ def ensure_schema(cur):
 
 
 def main():
-    print("=" * 60)
-    print("NSE Ticker Refresh - Starting")
-    print("=" * 60)
-
-    # Step 1: Download stock list
-    print("\n[1/3] Fetching EQUITY_L.csv from NSE archives...")
-    stock_list = fetch_equity_list()
-    total = len(stock_list)
-    print(f"      OK {total} stocks loaded")
-
-    # Step 2: Upsert into DB & remove delisted
-    print("\n[2/3] Syncing stock list to Neon DB...")
     conn = psycopg2.connect(NEON_URL)
     cur  = conn.cursor()
     ensure_schema(cur)
+    cur.execute("DELETE FROM job_progress WHERE job = 'nse_refresh'")
     conn.commit()
 
+    log(cur, conn, "NSE Ticker Refresh - Starting")
+
+    # Step 1: Download stock list
+    log(cur, conn, "[1/3] Fetching EQUITY_L.csv from NSE archives...")
+    stock_list = fetch_equity_list()
+    total = len(stock_list)
+    log(cur, conn, f"[1/3] OK {total} stocks loaded from NSE")
+
+    # Step 2: Upsert into DB & remove delisted
+    log(cur, conn, "[2/3] Syncing stock list to Neon DB...")
     execute_values(cur, """
         INSERT INTO stocks (stock_name, fyers_symbol, series, isin)
         VALUES %s
@@ -134,16 +141,16 @@ def main():
         END $$
     """)
     conn.commit()
-    print(f"      OK Upserted {total} | Removed {deleted} delisted | daily_ohlcv cache cleared")
+    log(cur, conn, f"[2/3] OK Upserted {total} | Removed {deleted} delisted | daily_ohlcv cleared")
 
-    # Step 3: Fetch classifications for all stocks, update only on change or blank
+    # Step 3: Fetch classifications for all stocks, delta update
     cur.execute("SELECT fyers_symbol, sector, industry, basic_industry FROM stocks ORDER BY fyers_symbol")
     all_stocks = cur.fetchall()
-    print(f"\n[3/3] Fetching classifications for all {len(all_stocks)} stocks...")
+    log(cur, conn, f"[3/3] Fetching classifications for all {len(all_stocks)} stocks...")
 
-    updated = 0
+    updated   = 0
     unchanged = 0
-    no_data = 0
+    no_data   = 0
 
     for i, (fyers_sym, db_sector, db_industry, db_basic) in enumerate(all_stocks):
         base   = fyers_sym.split(":")[1].rsplit("-", 1)[0]
@@ -157,11 +164,10 @@ def main():
             data = fetch_classification(base, series)
 
         if data:
-            # Update only if blank or any field changed
-            is_blank  = not (db_sector or db_industry or db_basic)
-            is_changed = (data["sector"]         != (db_sector   or "") or
-                          data["industry"]        != (db_industry or "") or
-                          data["basic_industry"]  != (db_basic    or ""))
+            is_blank   = not (db_sector or db_industry or db_basic)
+            is_changed = (data["sector"]        != (db_sector   or "") or
+                          data["industry"]       != (db_industry or "") or
+                          data["basic_industry"] != (db_basic    or ""))
             if is_blank or is_changed:
                 cur.execute("""
                     UPDATE stocks SET sector = %s, industry = %s, basic_industry = %s
@@ -170,7 +176,7 @@ def main():
                       f"NSE:{base}-EQ", f"NSE:{base}-BE", f"NSE:{base}-BZ", f"NSE:{base}-BL"))
                 updated += cur.rowcount
                 tag = "NEW" if is_blank else "CHANGED"
-                print(f"      [{i+1}/{len(all_stocks)}] {fyers_sym} [{tag}] -> {data['sector']} / {data['industry']}")
+                log(cur, conn, f"  {fyers_sym} [{tag}] -> {data['sector']} / {data['industry']}")
             else:
                 unchanged += 1
         else:
@@ -178,16 +184,14 @@ def main():
 
         if (i + 1) % 20 == 0:
             conn.commit()
+            log(cur, conn, f"  Progress: {i+1}/{len(all_stocks)} fetched | {updated} updated | {unchanged} unchanged")
 
     conn.commit()
-    print(f"      OK {updated} updated | {unchanged} unchanged | {no_data} no data from NSE")
+    log(cur, conn, f"[3/3] OK {updated} updated | {unchanged} unchanged | {no_data} no data from NSE")
+    log(cur, conn, f"NSE Ticker Refresh Complete — {total} synced, {deleted} removed")
 
     cur.close()
     conn.close()
-
-    print("\n" + "=" * 60)
-    print(f"OK Done — {total} synced, {deleted} removed")
-    print("=" * 60)
 
 
 if __name__ == "__main__":
