@@ -92,9 +92,9 @@ def ensure_schema(cur):
     """)
 
 
-def main(refresh_all=False):
+def main():
     print("=" * 60)
-    print("NSE Ticker Refresh - Starting" + (" (refresh ALL classifications)" if refresh_all else ""))
+    print("NSE Ticker Refresh - Starting")
     print("=" * 60)
 
     # Step 1: Download stock list
@@ -136,19 +136,13 @@ def main(refresh_all=False):
     conn.commit()
     print(f"      OK Upserted {total} | Removed {deleted} delisted | daily_ohlcv cache cleared")
 
-    # Step 3: Fetch classifications
-    if refresh_all:
-        cur.execute("SELECT fyers_symbol FROM stocks ORDER BY fyers_symbol")
-    else:
-        cur.execute("SELECT fyers_symbol FROM stocks WHERE sector IS NULL OR sector = '' ORDER BY fyers_symbol")
+    # Step 3: Fetch classifications for all stocks
+    cur.execute("SELECT fyers_symbol FROM stocks ORDER BY fyers_symbol")
     missing = cur.fetchall()
-    label = "all stocks" if refresh_all else f"{len(missing)} stocks missing sector"
-    print(f"\n[3/3] Fetching classifications for {label}...")
+    print(f"\n[3/3] Fetching classifications for all {len(missing)} stocks...")
 
-    if not missing:
-        print("      OK All stocks already have classifications")
-    else:
-        updated = 0
+    updated = 0
+    if missing:
         for i, (fyers_sym,) in enumerate(missing):
             base   = fyers_sym.split(":")[1].rsplit("-", 1)[0]
             series = fyers_sym.split(":")[1].rsplit("-", 1)[-1]
@@ -186,9 +180,4 @@ def main(refresh_all=False):
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--refresh-all", action="store_true",
-                        help="Re-fetch classifications for ALL stocks, not just missing ones")
-    args = parser.parse_args()
-    main(refresh_all=args.refresh_all)
+    main()
