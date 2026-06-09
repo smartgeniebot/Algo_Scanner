@@ -233,17 +233,23 @@ def do_write():
     cursor = conn.cursor()
     ensure_table(cursor, conn)
 
-    log(f"⚙️  [2/3] Precomputing O(1) lookup dicts for {len(stock_closes)} stocks...")
-    stock_anchor = {}
-    stock_dates  = {}
-    stock_day    = {}
+    # Only precompute closes for dates we actually need: anchor + write_dates.
+    # Precomputing all 495 dates per stock × 2243 stocks blows memory on GitHub Actions.
+    needed_dates = set(write_dates) | {anchor_date}
+    log(f"⚙️  [2/3] Precomputing lookup dicts for {len(stock_closes)} stocks x {len(needed_dates)} needed dates...")
+    stock_anchor = {}   # sym -> anchor close
+    stock_dates  = {}   # sym -> set of dates (needed only)
+    stock_day    = {}   # sym -> {date: close} (needed only)
     for sym, closes in stock_closes.items():
         if anchor_date not in closes.index:
             continue
         stock_anchor[sym] = float(closes[anchor_date])
-        dates_set         = set(closes.index)
-        stock_dates[sym]  = dates_set
-        stock_day[sym]    = {d: float(closes[d]) for d in dates_set}
+        day_map = {}
+        for d in needed_dates:
+            if d in closes.index:
+                day_map[d] = float(closes[d])
+        stock_dates[sym] = set(day_map.keys())
+        stock_day[sym]   = day_map
     log(f"✅ {len(stock_anchor)} stocks have anchor-date data and are eligible")
 
     log(f"📐 [3/3] Computing RS ratios and writing to DB...")
