@@ -192,12 +192,16 @@ def _dump_dropdown_items(page):
             pass
 
 
-def _click_import_in_popup(page) -> bool:
+def _click_import_in_popup(page):
     """
-    Fyers new UI: after opening dropdown, click 'Import list' or equivalent.
-    Also handles the case where a 'New watchlist' popup appears with an Import button inside.
+    Fyers new UI: after opening dropdown, find the upload trigger button.
+    Primary: #wiImportUploadBtn (confirmed from Fyers DOM).
+    Fallbacks: text variants and data-name selectors.
     """
     import_selectors = [
+        '#wiImportUploadBtn',
+        'button.wi-upload-trigger',
+        'text=Click here to upload File',
         'text=Import list',
         'text=Import List',
         'text=Import watchlist',
@@ -249,26 +253,30 @@ def _do_import(page, frame, file_path: Path) -> bool:
             return False
 
     log.info("Found Import button — triggering file chooser...")
+    # First try: set file directly on a nearby hidden input (most reliable)
+    for f in page.frames:
+        try:
+            inp = f.query_selector('input[type="file"]')
+            if inp:
+                inp.set_input_files(str(file_path))
+                time.sleep(1.0)
+                log.info("File set via hidden input: %s (%d symbols)",
+                         file_path.name, len(file_path.read_text().strip().split(",")))
+                return True
+        except Exception:
+            pass
+
+    # Second try: click button and catch the file chooser dialog
     try:
         with page.expect_file_chooser(timeout=10000) as fc:
             el.click()
         fc.value.set_files(str(file_path))
         time.sleep(1.0)
-        log.info("File set: %s (%d symbols)", file_path.name,
-                 len(file_path.read_text().strip().split(",")))
+        log.info("File set via file chooser: %s (%d symbols)",
+                 file_path.name, len(file_path.read_text().strip().split(",")))
         return True
     except Exception as e:
-        log.warning("File chooser failed: %s — trying input[type=file] fallback", e)
-        # Fallback: directly set file on hidden input if present
-        try:
-            for f in page.frames:
-                inp = f.query_selector('input[type="file"]')
-                if inp:
-                    inp.set_input_files(str(file_path))
-                    log.info("File set via hidden input fallback")
-                    return True
-        except Exception as e2:
-            log.warning("Hidden input fallback also failed: %s", e2)
+        log.warning("File chooser also failed: %s", e)
         return False
 
 
