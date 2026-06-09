@@ -2,25 +2,23 @@
 sector_rs_snapshot.py
 ---------------------
 Runs once per trading day (after manual_scan.py completes).
-Computes sector/industry/basic_industry RS ratio = group_avg_close / Nifty500_close
-and stores 63 days of history in sector_rs_history (Neon PostgreSQL).
+Computes sector/industry/basic_industry RS ratio and stores 63 days of
+history in sector_rs_history (Neon PostgreSQL).
 
-Crash-safe design:
-  - Stock closes are cached to sector_rs_cache.pkl after the Fyers fetch phase.
-  - If the DB write fails, re-run with --write-only to skip the 28-min fetch
-    and go straight to writing from the cache.
+RS ratio = avg(stock_return_from_anchor) / nifty_return_from_anchor
+  - stock_return = close_today / close_anchor  (% return, price-neutral)
+  - nifty_return = nifty_today / nifty_anchor
+  - rs_ratio > 1.0 means sector outperforming Nifty500 from anchor date
 
 Usage:
-  python sector_rs_snapshot.py --backfill          # first run: fetch + write 63d
-  python sector_rs_snapshot.py                     # daily: fetch + write today only
-  python sector_rs_snapshot.py --write-only        # retry DB write from saved cache
+  python sector_rs_snapshot.py                  # daily: write today only
+  python sector_rs_snapshot.py --backfill       # write last 63 days
+  python sector_rs_snapshot.py --wipe-and-backfill  # wipe + recompute all
 """
 
 import time
-import pickle
 import argparse
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import psycopg2
 import pandas as pd
@@ -28,15 +26,21 @@ from fyers_apiv3 import fyersModel
 
 from config import NEON_URL
 
-CLIENT_ID  = "QTKF8KZDM9-100"
+CLIENT_ID = "QTKF8KZDM9-100"
+IST       = timezone(timedelta(hours=5, minutes=30))
+LOOKBACK  = 63
+NIFTY500  = "NSE:NIFTY500-INDEX"
+NIFTY50   = "NSE:NIFTY50-INDEX"
 
 _log_conn = None
+
 
 def _get_log_conn():
     global _log_conn
     if _log_conn is None or _log_conn.closed:
         _log_conn = psycopg2.connect(NEON_URL)
     return _log_conn
+
 
 def log(msg):
     print(msg, flush=True)
@@ -48,11 +52,6 @@ def log(msg):
         cur.close()
     except Exception:
         pass
-IST        = timezone(timedelta(hours=5, minutes=30))
-LOOKBACK   = 63
-NIFTY500   = "NSE:NIFTY500-INDEX"
-NIFTY50    = "NSE:NIFTY50-INDEX"
-CACHE_FILE = Path("sector_rs_cache.pkl")
 
 
 def get_fyers():
@@ -67,7 +66,7 @@ def fetch_safe(fyers, payload, retries=3):
         if isinstance(res, dict) and res.get("s") == "ok" and res.get("candles"):
             return res
         if "limit" in str(res.get("message", "")).lower():
-            log("⏳ Rate limit hit — cooling 45 s")
+            log("⏳ Rate limit hit — cooling 45s")
             time.sleep(45)
             continue
         if attempt < retries - 1:
@@ -75,35 +74,26 @@ def fetch_safe(fyers, payload, retries=3):
     return {}
 
 
-def fetch_daily_closes_from_db(conn, symbol):
-    """Return a date-indexed Series of plain Python floats from daily_ohlcv cache."""
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT date, close FROM daily_ohlcv
-        WHERE fyers_symbol = %s ORDER BY date ASC
-    """, (symbol,))
-    rows = cur.fetchall()
-    cur.close()
-    if not rows:
-        return pd.Series(dtype=float)
-    df = pd.DataFrame(rows, columns=["ts", "close"])
-    df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
-    s = df.set_index("date")["close"]
-    return s.map(float)
+def fetch_nifty_closes(fyers):
+    """Fetch Nifty500 daily closes from Fyers. Falls back to Nifty50."""
+    today_ist  = datetime.now(IST).date()
+    range_from = (today_ist - timedelta(days=140)).strftime("%Y-%m-%d")
+    range_to   = today_ist.strftime("%Y-%m-%d")
 
+    for symbol in (NIFTY500, NIFTY50):
+        res = fetch_safe(fyers, {
+            "symbol": symbol, "resolution": "1D", "date_format": "1",
+            "range_from": range_from, "range_to": range_to, "cont_flag": "1",
+        })
+        if res.get("candles"):
+            df = pd.DataFrame(res["candles"], columns=["ts", "open", "high", "low", "close", "vol"])
+            df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
+            s = df.set_index("date")["close"].map(float)
+            log(f"✅ Nifty benchmark ({symbol}): {len(s)} days  ({s.index[0]} to {s.index[-1]})")
+            return s
+        log(f"⚠️  {symbol} failed, trying fallback...")
 
-def fetch_daily_closes(fyers, symbol, range_from, range_to):
-    """Return a date-indexed Series of plain Python floats, or empty Series."""
-    res = fetch_safe(fyers, {
-        "symbol": symbol, "resolution": "1D", "date_format": "1",
-        "range_from": range_from, "range_to": range_to, "cont_flag": "1",
-    })
-    if not res.get("candles"):
-        return pd.Series(dtype=float)
-    df = pd.DataFrame(res["candles"], columns=["ts", "open", "high", "low", "close", "vol"])
-    df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
-    s = df.set_index("date")["close"]
-    return s.map(float)
+    return pd.Series(dtype=float)
 
 
 def ensure_table(cursor, conn):
@@ -121,32 +111,35 @@ def ensure_table(cursor, conn):
     conn.commit()
 
 
-def do_fetch(backfill):
-    """Phase 1 — load stock closes from daily_ohlcv DB cache; fetch Nifty benchmark from Fyers."""
-    today_ist  = datetime.now(IST).date()
-    cal_days   = 140
-    range_from = (today_ist - timedelta(days=cal_days)).strftime("%Y-%m-%d")
-    range_to   = today_ist.strftime("%Y-%m-%d")
+def run(backfill=False):
+    """
+    Single-pass: fetch Nifty from Fyers, load groups + closes from DB,
+    compute RS ratios, write to sector_rs_history. No pkl, no large RAM usage.
+    """
+    log("=" * 55)
+    log(f"Sector RS Snapshot  |  backfill={backfill}  |  window={LOOKBACK}d")
+    log("=" * 55)
 
-    log(f"{'='*55}")
-    log(f"Phase 1: Fetch  |  backfill={backfill}  |  window={LOOKBACK}d")
-    log(f"{'='*55}")
-
-    fyers = get_fyers()
-
-    log("📥 [1/4] Fetching Nifty500 benchmark from Fyers...")
-    nifty_closes = fetch_daily_closes(fyers, NIFTY500, range_from, range_to)
+    # ── Step 1: Nifty benchmark from Fyers ───────────────────────────────────
+    log("[1/5] Fetching Nifty500 benchmark from Fyers...")
+    fyers        = get_fyers()
+    nifty_closes = fetch_nifty_closes(fyers)
     if nifty_closes.empty:
-        log("⚠️  Nifty500 failed, falling back to Nifty50...")
-        nifty_closes = fetch_daily_closes(fyers, NIFTY50, range_from, range_to)
-    if nifty_closes.empty:
-        log("❌ Could not fetch benchmark data. Aborting.")
+        log("❌ Could not fetch benchmark. Aborting.")
         return False
-    log(f"✅ Nifty500: {len(nifty_closes)} days  ({nifty_closes.index[0]} to {nifty_closes.index[-1]})")
 
-    log("📋 [2/4] Loading stock list from DB...")
+    all_dates_window = sorted(nifty_closes.index)[-LOOKBACK:]
+    anchor_date      = all_dates_window[0]
+    write_dates      = all_dates_window if backfill else [all_dates_window[-1]]
+    nifty_anchor     = float(nifty_closes[anchor_date])
+    log(f"   anchor={anchor_date}  write_dates={len(write_dates)}  ({write_dates[0]} to {write_dates[-1]})")
+
+    # ── Step 2: Groups from stocks table ─────────────────────────────────────
+    log("[2/5] Loading stock groups from DB...")
     conn   = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
+    ensure_table(cursor, conn)
+
     cursor.execute("""
         SELECT fyers_symbol, sector, industry, basic_industry
         FROM stocks
@@ -154,125 +147,52 @@ def do_fetch(backfill):
           AND fyers_symbol IS NOT NULL
     """)
     stock_rows = cursor.fetchall()
-    log(f"✅ {len(stock_rows)} stocks loaded")
-
-    log("🗂️  [3/4] Building sector/industry/basic_industry group maps...")
     groups = {"sector": {}, "industry": {}, "basic_industry": {}}
     for sym, sec, ind, bi in stock_rows:
         if sec: groups["sector"].setdefault(sec, []).append(sym)
         if ind: groups["industry"].setdefault(ind, []).append(sym)
         if bi:  groups["basic_industry"].setdefault(bi, []).append(sym)
-    log(f"✅ Groups: {len(groups['sector'])} sectors | {len(groups['industry'])} industries | {len(groups['basic_industry'])} basic industries")
+    log(f"   {len(stock_rows)} stocks | {len(groups['sector'])} sectors | "
+        f"{len(groups['industry'])} industries | {len(groups['basic_industry'])} basic industries")
 
-    log(f"📂 [4/4] Loading daily closes from daily_ohlcv for {len(stock_rows)} stocks...")
-    stock_closes = {}
-    seen = set()
-    total = len(stock_rows)
-    for i, (sym, *_) in enumerate(stock_rows):  # noqa
-        if sym in seen:
-            continue
-        seen.add(sym)
-        closes = fetch_daily_closes_from_db(conn, sym)
-        if not closes.empty:
-            stock_closes[sym] = closes
-        if (i + 1) % 500 == 0 or (i + 1) == total:
-            pct = round((i + 1) / total * 100)
-            log(f"  {i+1}/{total} ({pct}%) — {len(stock_closes)} with data")
-
-    cursor.close()
-    conn.close()
-    log(f"✅ Closes loaded: {len(stock_closes)}/{len(seen)} stocks have data")
-
-    if not stock_closes:
-        log("❌ daily_ohlcv cache is empty — market_engine must run first. Aborting.")
-        return False
-
-    cache = {
-        "nifty_closes": nifty_closes,
-        "groups":       groups,
-        "stock_closes": stock_closes,
-        "backfill":     backfill,
-    }
-    with open(CACHE_FILE, "wb") as f:
-        pickle.dump(cache, f)
-    log(f"💾 Cache saved to {CACHE_FILE}")
-    return True
-
-
-def do_write():
-    """Phase 2 — compute RS ratios and write to Neon.
-    Reads only the needed dates directly from daily_ohlcv — no pkl loading into RAM.
-    """
-    if not CACHE_FILE.exists():
-        log("❌ No cache file found. Run without --write-only first.")
-        return
-
-    log(f"📂 Loading cache metadata from {CACHE_FILE}...")
-    with open(CACHE_FILE, "rb") as f:
-        cache = pickle.load(f)
-
-    nifty_closes = cache["nifty_closes"]
-    groups       = cache["groups"]
-    backfill     = cache["backfill"]
-    # stock_closes from cache is NOT used — we query DB directly for memory efficiency
-
-    all_dates_window = sorted(nifty_closes.index)[-LOOKBACK:]
-    anchor_date      = all_dates_window[0]
-    write_dates      = all_dates_window if backfill else [all_dates_window[-1]]
-
-    if anchor_date not in nifty_closes.index:
-        log("❌ Anchor date not found in Nifty closes. Aborting.")
-        return
-    nifty_anchor = float(nifty_closes[anchor_date])
-
-    log(f"{'='*55}")
-    log(f"Phase 2: Compute & Write  |  anchor={anchor_date}  |  write_dates={len(write_dates)}")
-    log(f"{'='*55}")
-
-    log("🔌 [1/3] Connecting to DB...")
-    conn   = psycopg2.connect(NEON_URL)
-    cursor = conn.cursor()
-    ensure_table(cursor, conn)
-
-    # Query only the needed dates from daily_ohlcv — avoids loading full history into RAM.
-    # anchor_date is a Python date; daily_ohlcv stores Unix timestamps (seconds).
+    # ── Step 3: Load only needed closes from daily_ohlcv ─────────────────────
     needed_dates = sorted(set(write_dates) | {anchor_date})
-    # Convert dates to epoch-second ranges for each date (full trading day = any ts on that date)
-    log(f"⚙️  [2/3] Loading closes for {len(needed_dates)} needed dates from daily_ohlcv...")
-    # Fetch all needed closes in one query using date-cast
+    log(f"[3/5] Loading closes for {len(needed_dates)} needed dates from daily_ohlcv...")
+    t0 = time.time()
     cursor.execute("""
         SELECT fyers_symbol, to_timestamp(date)::date AS trade_date, close
         FROM daily_ohlcv
         WHERE to_timestamp(date)::date = ANY(%s)
-        ORDER BY fyers_symbol, date
     """, (needed_dates,))
     rows = cursor.fetchall()
-    log(f"✅ {len(rows)} rows fetched for {len(needed_dates)} dates")
+    log(f"   {len(rows)} rows fetched in {time.time()-t0:.1f}s")
 
-    # Build stock_anchor and stock_day from DB rows directly
-    stock_anchor = {}   # sym -> float anchor close
     stock_day    = {}   # sym -> {date: float close}
-    for sym, trade_date, close in rows:
+    stock_anchor = {}   # sym -> float anchor close
+    for sym, td, close in rows:
         if close is None:
             continue
-        stock_day.setdefault(sym, {})[trade_date] = float(close)
+        stock_day.setdefault(sym, {})[td] = float(close)
     for sym, day_map in stock_day.items():
         if anchor_date in day_map:
             stock_anchor[sym] = day_map[anchor_date]
-    log(f"✅ {len(stock_anchor)} stocks have anchor-date data and are eligible")
+    log(f"   {len(stock_anchor)} stocks have anchor-date data")
 
-    log(f"📐 [3/3] Computing RS ratios and writing to DB...")
-    group_types = list(groups.items())
-    total_types = len(group_types)
+    # ── Step 4: Compute RS ratios ─────────────────────────────────────────────
+    log("[4/5] Computing RS ratios...")
+    group_type_list = list(groups.items())
+    total_types     = len(group_type_list)
+    all_batches     = {}
 
-    for t_idx, (group_type, group_dict) in enumerate(group_types):
-        n_groups   = len(group_dict)
-        log(f"  [{t_idx+1}/{total_types}] {group_type} — {n_groups} groups x {len(write_dates)} dates")
-        batch      = []
-        skipped    = 0
+    for t_idx, (group_type, group_dict) in enumerate(group_type_list):
+        n_groups = len(group_dict)
+        log(f"   [{t_idx+1}/{total_types}] {group_type} — {n_groups} groups x {len(write_dates)} dates")
+        t0      = time.time()
+        batch   = []
+        skipped = 0
 
         for g_idx, (group_name, symbols) in enumerate(group_dict.items()):
-            eligible = [sym for sym in symbols if sym in stock_anchor]
+            eligible = [s for s in symbols if s in stock_anchor]
             if not eligible:
                 skipped += 1
                 continue
@@ -284,12 +204,12 @@ def do_write():
                 if not nifty_now:
                     continue
 
-                paired = [sym for sym in eligible if trade_date in stock_day.get(sym, {})]
+                paired = [s for s in eligible if trade_date in stock_day.get(s, {})]
                 if not paired:
                     continue
 
-                avg_return   = sum(stock_day[sym][trade_date] / stock_anchor[sym]
-                                   for sym in paired) / len(paired)
+                avg_return   = sum(stock_day[s][trade_date] / stock_anchor[s]
+                                   for s in paired) / len(paired)
                 nifty_return = nifty_now / nifty_anchor
                 rs_ratio     = avg_return / nifty_return
 
@@ -298,10 +218,18 @@ def do_write():
                     round(float(rs_ratio), 6), int(len(paired)),
                 ))
 
-            pct = round((g_idx + 1) / n_groups * 100)
             if (g_idx + 1) % 50 == 0 or (g_idx + 1) == n_groups:
-                log(f"    {g_idx+1}/{n_groups} groups ({pct}%) — {len(batch)} rows so far")
+                pct = round((g_idx + 1) / n_groups * 100)
+                log(f"     {g_idx+1}/{n_groups} groups ({pct}%) — {len(batch)} rows computed")
 
+        log(f"   {group_type} computed: {len(batch)} rows | {skipped} skipped | {time.time()-t0:.2f}s")
+        all_batches[group_type] = batch
+
+    # ── Step 5: Write to DB ───────────────────────────────────────────────────
+    log("[5/5] Writing to DB...")
+    total_written = 0
+    for group_type, batch in all_batches.items():
+        t0 = time.time()
         cursor.executemany("""
             INSERT INTO sector_rs_history (group_type, group_name, trade_date, rs_ratio, stock_count)
             VALUES (%s, %s, %s::date, %s, %s)
@@ -309,20 +237,20 @@ def do_write():
             DO UPDATE SET rs_ratio = EXCLUDED.rs_ratio, stock_count = EXCLUDED.stock_count
         """, batch)
         conn.commit()
-        log(f"  ✅ {group_type} done: {len(batch)} rows upserted | {skipped} groups skipped (no anchor data)")
+        total_written += len(batch)
+        log(f"   {group_type}: {len(batch)} rows written in {time.time()-t0:.2f}s")
 
     cursor.close()
     conn.close()
-    log("\n🏁 Sector RS snapshot complete.")
-    CACHE_FILE.unlink(missing_ok=True)
-    log("🗑️  Cache file removed.")
+    log(f"")
+    log(f"Sector RS Snapshot complete — {total_written} total rows written.")
+    return True
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backfill",        action="store_true", help="Populate last 63 trading days")
-    parser.add_argument("--write-only",      action="store_true", help="Skip fetch, write from saved cache")
-    parser.add_argument("--wipe-and-backfill", action="store_true", help="Wipe sector_rs_history and recompute all 63 days fresh")
+    parser.add_argument("--backfill",          action="store_true", help="Write last 63 days")
+    parser.add_argument("--wipe-and-backfill", action="store_true", help="Wipe history and recompute all 63 days")
     args = parser.parse_args()
 
     if args.wipe_and_backfill:
@@ -332,11 +260,7 @@ if __name__ == "__main__":
         conn.commit()
         cur.close()
         conn.close()
-        log("🗑️  sector_rs_history wiped — running full backfill...")
-        if do_fetch(backfill=True):
-            do_write()
-    elif args.write_only:
-        do_write()
+        log("sector_rs_history wiped — running full backfill...")
+        run(backfill=True)
     else:
-        if do_fetch(backfill=args.backfill):
-            do_write()
+        run(backfill=args.backfill)
