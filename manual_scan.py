@@ -107,13 +107,9 @@ def fetch_and_upsert_screener(conn, cursor, url, db_column, label):
             return
 
         for symbol in fyers_symbols:
-            # Dynamically insert/update based on which column we are currently scraping
-            query = f"""
-                INSERT INTO stocks (fyers_symbol, industry, {db_column}) 
-                VALUES (%s, 'Unclassified', True)
-                ON CONFLICT (fyers_symbol) 
-                DO UPDATE SET {db_column} = True
-            """
+            # Only update existing stocks — never insert new ones from Screener
+            # (Screener may list delisted/SME stocks not in NSE's official list)
+            query = f"UPDATE stocks SET {db_column} = True WHERE fyers_symbol = %s"
             cursor.execute(query, (symbol,))
         
         conn.commit()
