@@ -189,20 +189,47 @@ def main():
     conn.commit()
     log(cur, conn, f"[3/3] OK {updated} updated | {unchanged} unchanged | {no_data} no data from NSE")
 
-    # Normalize any ALL-CAPS classification values — title-case them automatically
-    # This handles both known bad values and any new ones NSE introduces in future
+    # Step 1: Apply known canonical mappings (ALL-CAPS NSE values with wrong names)
+    SECTOR_MAP = {
+        'AUTOMOBILE':          'Automobile and Auto Components',
+        'CONSTRUCTION':        'Construction',
+        'HEALTHCARE SERVICES': 'Healthcare',
+        'SERVICES':            'Services',
+    }
+    INDUSTRY_MAP = {
+        'AUTO ANCILLARIES':                                  'Auto Components',
+        'CONSTRUCTION':                                      'Construction',
+        'HEALTHCARE SERVICES':                               'Healthcare Services',
+        'HOTELS/ RESORTS AND OTHER RECREATIONAL ACTIVITIES': 'Leisure Services',
+        'TRADING':                                           'Commercial Services & Supplies',
+    }
     norm_count = 0
+    for bad, good in SECTOR_MAP.items():
+        cur.execute('UPDATE stocks SET sector = %s WHERE sector = %s', (good, bad))
+        norm_count += cur.rowcount
+    for bad, good in INDUSTRY_MAP.items():
+        cur.execute('UPDATE stocks SET industry = %s WHERE industry = %s', (good, bad))
+        norm_count += cur.rowcount
+        cur.execute('UPDATE stocks SET basic_industry = %s WHERE basic_industry = %s', (good, bad))
+        norm_count += cur.rowcount
+    conn.commit()
+
+    # Step 2: For any remaining ALL-CAPS values not in the map, title-case them
+    known_caps = set(SECTOR_MAP) | set(INDUSTRY_MAP)
     for col in ('sector', 'industry', 'basic_industry'):
         cur.execute(f"SELECT DISTINCT {col} FROM stocks WHERE {col} = UPPER({col}) AND {col} != 'Unclassified'")
-        caps_vals = [r[0] for r in cur.fetchall() if r[0]]
-        for val in caps_vals:
+        for (val,) in cur.fetchall():
+            if not val or val in known_caps:
+                continue
             fixed = val.title()
             cur.execute(f'UPDATE stocks SET {col} = %s WHERE {col} = %s', (fixed, val))
             if cur.rowcount:
                 log(cur, conn, f"  Normalized {col}: '{val}' -> '{fixed}' ({cur.rowcount} rows)")
                 norm_count += cur.rowcount
     conn.commit()
-    if not norm_count:
+    if norm_count:
+        log(cur, conn, f"  Total normalized: {norm_count} value(s)")
+    else:
         log(cur, conn, "  No normalization needed")
 
     # Fill any remaining NULLs with Unclassified
