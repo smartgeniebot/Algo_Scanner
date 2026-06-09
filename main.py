@@ -363,6 +363,7 @@ async def trigger_sector_rs():
     repo  = os.environ.get("GITHUB_REPO")
     if not token or not repo:
         return {"status": "error", "message": "Server missing GITHUB_TOKEN or GITHUB_REPO env vars"}
+    _clear_job_progress("sector_rs")
     gh_headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
     resp = requests.post(
         f"https://api.github.com/repos/{repo}/actions/workflows/sector_rs_engine.yml/dispatches",
@@ -376,6 +377,11 @@ async def trigger_sector_rs():
 @app.get("/api/sector-rs-status")
 async def sector_rs_status():
     return _get_workflow_status("sector_rs_engine.yml")
+
+
+@app.get("/api/sector-rs-progress")
+async def sector_rs_progress(since_id: int = 0):
+    return _get_progress("sector_rs", since_id)
 
 
 @app.get("/api/refresh-progress")

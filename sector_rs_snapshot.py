@@ -30,6 +30,25 @@ from tqdm import tqdm
 from config import NEON_URL
 
 CLIENT_ID  = "QTKF8KZDM9-100"
+
+_log_conn = None
+
+def _get_log_conn():
+    global _log_conn
+    if _log_conn is None or _log_conn.closed:
+        _log_conn = psycopg2.connect(NEON_URL)
+    return _log_conn
+
+def log(msg):
+    print(msg)
+    try:
+        c = _get_log_conn()
+        cur = c.cursor()
+        cur.execute("INSERT INTO job_progress (job, line) VALUES (%s, %s)", ("sector_rs", msg))
+        c.commit()
+        cur.close()
+    except Exception:
+        pass
 IST        = timezone(timedelta(hours=5, minutes=30))
 LOOKBACK   = 63
 NIFTY500   = "NSE:NIFTY500-INDEX"
@@ -49,7 +68,7 @@ def fetch_safe(fyers, payload, retries=3):
         if isinstance(res, dict) and res.get("s") == "ok" and res.get("candles"):
             return res
         if "limit" in str(res.get("message", "")).lower():
-            print("⏳ Rate limit hit — cooling 45 s")
+            log("⏳ Rate limit hit — cooling 45 s")
             time.sleep(45)
             continue
         if attempt < retries - 1:
@@ -113,15 +132,15 @@ def do_fetch(backfill):
     fyers = get_fyers()
 
     # Nifty index is not in daily_ohlcv — fetch from Fyers as before
-    print("📥 Fetching Nifty500 benchmark closes from Fyers...")
+    log("📥 Fetching Nifty500 benchmark closes from Fyers...")
     nifty_closes = fetch_daily_closes(fyers, NIFTY500, range_from, range_to)
     if nifty_closes.empty:
-        print("⚠️  Nifty500 failed, falling back to Nifty50...")
+        log("⚠️  Nifty500 failed, falling back to Nifty50...")
         nifty_closes = fetch_daily_closes(fyers, NIFTY50, range_from, range_to)
     if nifty_closes.empty:
-        print("❌ Could not fetch benchmark data. Aborting.")
+        log("❌ Could not fetch benchmark data. Aborting.")
         return False
-    print(f"✅ Nifty benchmark: {len(nifty_closes)} days ({nifty_closes.index[0]} → {nifty_closes.index[-1]})")
+    log(f"✅ Nifty benchmark: {len(nifty_closes)} days ({nifty_closes.index[0]} → {nifty_closes.index[-1]})")
 
     # Load stock list + closes from DB cache — no Fyers calls for individual stocks
     conn   = psycopg2.connect(NEON_URL)
@@ -133,7 +152,7 @@ def do_fetch(backfill):
           AND fyers_symbol IS NOT NULL
     """)
     stock_rows = cursor.fetchall()
-    print(f"📊 Loaded {len(stock_rows)} stocks from DB")
+    log(f"📊 Loaded {len(stock_rows)} stocks from DB")
 
     # Build group mappings
     groups = {"sector": {}, "industry": {}, "basic_industry": {}}
@@ -143,7 +162,7 @@ def do_fetch(backfill):
         if bi:  groups["basic_industry"].setdefault(bi, []).append(sym)
 
     # Load closes from daily_ohlcv cache
-    print(f"\n📂 Loading daily closes from daily_ohlcv cache for {len(stock_rows)} stocks...")
+    log(f"\n📂 Loading daily closes from daily_ohlcv cache for {len(stock_rows)} stocks...")
     stock_closes = {}
     seen = set()
     for sym, *_ in tqdm(stock_rows):
@@ -156,10 +175,10 @@ def do_fetch(backfill):
 
     cursor.close()
     conn.close()
-    print(f"✅ Got closes for {len(stock_closes)} / {len(seen)} stocks")
+    log(f"✅ Got closes for {len(stock_closes)} / {len(seen)} stocks")
 
     if not stock_closes:
-        print("❌ daily_ohlcv cache is empty — market_engine must run first. Aborting.")
+        log("❌ daily_ohlcv cache is empty — market_engine must run first. Aborting.")
         return False
 
     # Save everything to cache
@@ -171,17 +190,17 @@ def do_fetch(backfill):
     }
     with open(CACHE_FILE, "wb") as f:
         pickle.dump(cache, f)
-    print(f"💾 Cache saved to {CACHE_FILE}")
+    log(f"💾 Cache saved to {CACHE_FILE}")
     return True
 
 
 def do_write():
     """Phase 2 — load cache and write to Neon. Can be retried independently."""
     if not CACHE_FILE.exists():
-        print("❌ No cache file found. Run without --write-only first.")
+        log("❌ No cache file found. Run without --write-only first.")
         return
 
-    print(f"📂 Loading cache from {CACHE_FILE}...")
+    log(f"📂 Loading cache from {CACHE_FILE}...")
     with open(CACHE_FILE, "rb") as f:
         cache = pickle.load(f)
 
@@ -197,7 +216,7 @@ def do_write():
     # Dates we actually write rows for: all 63 on backfill, just today otherwise
     write_dates = all_dates_window if backfill else [all_dates_window[-1]]
 
-    print("🔌 Connecting to DB...")
+    log("🔌 Connecting to DB...")
     conn   = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
     ensure_table(cursor, conn)
@@ -256,14 +275,14 @@ def do_write():
             DO UPDATE SET rs_ratio = EXCLUDED.rs_ratio, stock_count = EXCLUDED.stock_count
         """, batch)
         conn.commit()
-        print(f"  ✅ {group_type}: {len(batch)} rows upserted")
+        log(f"  ✅ {group_type}: {len(batch)} rows upserted")
 
     cursor.close()
     conn.close()
-    print("\n🏁 Sector RS snapshot complete.")
+    log("\n🏁 Sector RS snapshot complete.")
     # Remove cache after successful write
     CACHE_FILE.unlink(missing_ok=True)
-    print("🗑️  Cache file removed.")
+    log("🗑️  Cache file removed.")
 
 
 if __name__ == "__main__":

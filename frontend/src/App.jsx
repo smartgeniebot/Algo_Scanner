@@ -34,6 +34,7 @@ function App() {
   const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle');
   const [refreshLog, setRefreshLog] = useState([]);
   const [sectorRsStatus, setSectorRsStatus] = useState('idle');
+  const [sectorRsLog, setSectorRsLog] = useState([]);
 
   const [scannerSubTab, setScannerSubTab] = useState('all');
 
@@ -244,12 +245,54 @@ function App() {
 
   const handleTriggerSectorRs = async () => {
     setSectorRsStatus('loading');
+    setSectorRsLog([]);
+    const log = (msg) => setSectorRsLog(prev => [...prev, msg]);
+
+    log('📊 Triggering Sector RS Snapshot via GitHub Actions...');
     try {
       const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-sector-rs', { method: 'POST' });
       const d = await r.json();
-      if (d.status !== 'triggered') { setSectorRsStatus('error'); return; }
-    } catch (e) { setSectorRsStatus('error'); return; }
-    setTimeout(() => setSectorRsStatus('idle'), 4000);
+      if (d.status !== 'triggered') { log(`❌ ${d.message || 'Trigger failed'}`); setSectorRsStatus('error'); return; }
+    } catch (e) { log(`❌ ${e.message}`); setSectorRsStatus('error'); return; }
+
+    log('  ↳ Workflow triggered — waiting for GitHub Actions to start...');
+    let lastId = 0;
+
+    const progressInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`https://algo-scanner-lnck.onrender.com/api/sector-rs-progress?since_id=${lastId}`);
+        const d = await r.json();
+        if (d.lines && d.lines.length > 0) {
+          d.lines.forEach(({ id, line }) => { lastId = Math.max(lastId, id); log(line); });
+        }
+      } catch (_) {}
+    }, 3000);
+
+    new Promise((resolve, reject) => {
+      const statusCheck = setInterval(async () => {
+        try {
+          const r = await fetch('https://algo-scanner-lnck.onrender.com/api/sector-rs-status');
+          const d = await r.json();
+          if (d.status === 'completed') {
+            clearInterval(statusCheck);
+            await new Promise(res => setTimeout(res, 4000));
+            try {
+              const r2 = await fetch(`https://algo-scanner-lnck.onrender.com/api/sector-rs-progress?since_id=${lastId}`);
+              const d2 = await r2.json();
+              if (d2.lines && d2.lines.length > 0) d2.lines.forEach(({ line }) => log(line));
+            } catch (_) {}
+            clearInterval(progressInterval);
+            d.conclusion === 'success' ? resolve() : reject(new Error(d.conclusion));
+          }
+        } catch (_) {}
+      }, 15000);
+    }).then(() => {
+      setSectorRsStatus('success');
+    }).catch((e) => {
+      log(`❌ Workflow failed (${e.message}). Check GitHub Actions for details.`);
+      clearInterval(progressInterval);
+      setSectorRsStatus('error');
+    });
   };
 
   const handleRefreshNseTickers = async () => {
@@ -1159,10 +1202,19 @@ function App() {
                 }}
               >
                 {sectorRsStatus === 'idle'    && '📊 Run Sector RS Snapshot'}
-                {sectorRsStatus === 'loading' && '⏳ Triggering...'}
-                {sectorRsStatus === 'success' && '✅ Triggered!'}
+                {sectorRsStatus === 'loading' && '⏳ Running...'}
+                {sectorRsStatus === 'success' && '✅ Complete!'}
                 {sectorRsStatus === 'error'   && '❌ Failed — Retry'}
               </button>
+
+              {sectorRsLog.length > 0 && (
+                <div style={{ backgroundColor: theme === 'dark' ? '#020617' : '#0f172a', borderRadius: '8px', padding: '14px 16px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.8', maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {sectorRsLog.map((line, i) => (
+                    <div key={i} style={{ color: line.startsWith('❌') ? '#f87171' : line.startsWith('✅') || line.startsWith('🏁') ? '#4ade80' : line.startsWith('📊') || line.startsWith('📥') || line.startsWith('📂') || line.startsWith('💾') ? '#60a5fa' : line.startsWith('  ↳') || line.startsWith('  ✅') ? '#94a3b8' : line.startsWith('⚠️') ? '#fbbf24' : '#e2e8f0' }}>{line}</div>
+                  ))}
+                  {sectorRsStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
+                </div>
+              )}
             </div>
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
