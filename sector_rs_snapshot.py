@@ -146,11 +146,11 @@ def run(backfill=False):
             SELECT DISTINCT trade_date FROM sector_rs_history
             WHERE group_type = 'sector'
               AND trade_date = ANY(%s)
-        """, (all_dates_window[-5:],))
+        """, (all_dates_window[-10:],))
         already_written = {r[0] for r in cur_check.fetchall()}
         cur_check.close()
         conn_check.close()
-        write_dates = [d for d in all_dates_window[-5:] if d not in already_written]
+        write_dates = [d for d in all_dates_window[-10:] if d not in already_written]
         if not write_dates:
             log("✅ All recent dates already written — nothing to do.")
             return True
