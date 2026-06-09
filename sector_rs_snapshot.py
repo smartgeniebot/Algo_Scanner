@@ -135,7 +135,29 @@ def run(backfill=False):
 
     all_dates_window = sorted(nifty_closes.index)[-LOOKBACK:]
     anchor_date      = all_dates_window[0]
-    write_dates      = all_dates_window if backfill else [all_dates_window[-1]]
+
+    if backfill:
+        write_dates = all_dates_window
+    else:
+        # Auto catch-up: find any missing dates in the last 5 trading days
+        conn_check = psycopg2.connect(NEON_URL)
+        cur_check  = conn_check.cursor()
+        cur_check.execute("""
+            SELECT DISTINCT trade_date FROM sector_rs_history
+            WHERE group_type = 'sector'
+              AND trade_date = ANY(%s)
+        """, (all_dates_window[-5:],))
+        already_written = {r[0] for r in cur_check.fetchall()}
+        cur_check.close()
+        conn_check.close()
+        write_dates = [d for d in all_dates_window[-5:] if d not in already_written]
+        if not write_dates:
+            log("✅ All recent dates already written — nothing to do.")
+            return True
+        if len(write_dates) > 1:
+            log(f"⚠️  Catching up {len(write_dates)} missed dates: {write_dates}")
+        else:
+            log(f"   Writing date: {write_dates[0]}")
     nifty_anchor     = float(nifty_closes[anchor_date])
     log(f"   anchor={anchor_date}  write_dates={len(write_dates)}  ({write_dates[0]} to {write_dates[-1]})")
 
