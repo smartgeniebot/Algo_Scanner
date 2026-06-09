@@ -355,69 +355,78 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
 
             <div style={{ padding: '14px 18px', borderBottom: `1px solid ${t.border}`, backgroundColor: isDark ? 'rgba(30,41,59,0.4)' : '#f8fafc' }}>
               <code style={{ display: 'block', fontSize: 12, lineHeight: 2, color: isDark ? '#7dd3fc' : '#1e40af', fontFamily: 'monospace' }}>
-                RS          = sector_avg_close / Nifty500_close  (stored daily)<br />
-                RS Ratio    = 100 + (RS - SMA14(RS)) / StdDev14(RS)<br />
-                RS Momentum = 100 + (ROC10 - SMA14(ROC10)) / StdDev14(ROC10)  where ROC10 = 10-period rate of change of RS Ratio<br />
-                % from High = (RS_Ratio_today - max_RS_Ratio_63d) / max_RS_Ratio_63d x 100
+                RS               = avg(stock_return_from_anchor) / nifty500_return_from_anchor  (stored daily)<br />
+                Abs Return (63D) = avg stock return from anchor date  e.g. +16.3% means sector avg up 16.3%<br />
+                vs Nifty500 (63D)= (RS_ratio - 1) × 100  e.g. +17.7% means sector beat Nifty500 by 17.7 pts<br />
+                RS Ratio         = 100 + (RS - SMA14(RS)) / StdDev14(RS)  — Z-score centred at 100<br />
+                RS Momentum (10D)= 100 + (ROC10 - SMA14(ROC10)) / StdDev14(ROC10)  where ROC10 = 10-day ROC of RS Ratio<br />
+                % from High      = (RS_Ratio_today - max_RS_Ratio_63d) / max_RS_Ratio_63d × 100
               </code>
               <div style={{ marginTop: 10, padding: '8px 12px', backgroundColor: isDark ? 'rgba(22,163,74,0.1)' : '#f0fdf4', borderRadius: 6, border: `1px solid ${isDark ? 'rgba(22,163,74,0.3)' : '#bbf7d0'}`, fontSize: 12, color: isDark ? '#4ade80' : '#15803d', fontWeight: 600 }}>
-                Look for: LEADING quadrant · RS Ratio above 100 · RS Momentum above 100 · ROC positive · % from High near 0%
+                Look for: IMPROVING → LEADING rotation · RS Ratio above 100 · RS Momentum (10D) above 100 · vs Nifty500 positive · % from High near 0%
               </div>
             </div>
 
             <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 0 }}>
               {[
                 {
-                  col: 'RS RATIO (63D) — Sparkline',
+                  col: 'RS Ratio (63D) — Sparkline',
                   color: '#3b82f6',
                   formula: 'Full 63-day series of RS Ratio = 100 + (RS - SMA14(RS)) / StdDev14(RS)',
-                  means: 'Line chart of the RS Ratio Z-score over 63 trading days. Centerline is 100. Each point shows how many standard deviations the sector\'s raw ratio (avg_close / Nifty500_close) is from its own 14-day average. Above 100 = outperforming on a normalised basis. Below 100 = underperforming.',
-                  lookfor: 'Line trending upward and staying above 100 = sustained relative strength. Crossing from below 100 to above = IMPROVING → LEADING rotation beginning.',
-                  colors: 'Green = LEADING · Orange = IMPROVING · Dark Orange = WEAKENING · Red = LAGGING',
+                  means: 'Line chart of the RS Ratio Z-score over 63 trading days. Centerline is 100. Each point shows how many standard deviations the sector\'s relative strength vs Nifty500 is from its own 14-day average. Above 100 = outperforming on a normalised basis. Below 100 = below recent average.',
+                  lookfor: 'Line trending upward and staying above 100 = sustained relative strength. Crossing from below 100 to above = IMPROVING → LEADING rotation beginning. Color = quadrant: Green (LEADING) · Orange (IMPROVING) · Dark Orange (WEAKENING) · Red (LAGGING).',
                 },
                 {
-                  col: 'RS RATIO (current value)',
+                  col: 'vs Nifty 500 (63D)',
+                  color: '#f59e0b',
+                  formula: '(rs_ratio - 1) × 100  where rs_ratio = avg(stock_return_from_anchor) / nifty500_return_from_anchor',
+                  means: 'How much the sector has outperformed or underperformed Nifty500 in percentage points over the 63-day window from anchor date. This is the raw outperformance number — Nifty500 is always the baseline (0%). Positive = beating Nifty500. Negative = lagging Nifty500.',
+                  lookfor: 'Positive and growing = sector gaining ground vs Nifty500. Use alongside RS Ratio to confirm strength.',
+                  example: '+17.7% = sector returned 17.7 percentage points more than Nifty500 from anchor · -2.1% = sector lagged Nifty500 by 2.1 pts',
+                },
+                {
+                  col: 'Abs Return (63D)',
+                  color: '#6366f1',
+                  formula: '(avg_stock_return_from_anchor - 1) × 100  — average % gain of all stocks in the sector from anchor date',
+                  means: 'The actual absolute return of the sector\'s stocks from the anchor date (first day of the 63-day window), regardless of what Nifty500 did. This shows the raw price performance of the sector itself.',
+                  lookfor: 'Use alongside vs Nifty500 to understand the full picture. High abs return + high vs Nifty500 = sector leading in both absolute and relative terms.',
+                  example: '+16.3% = sector stocks gained 16.3% on average from anchor date · -2.6% = sector down 2.6% from anchor',
+                },
+                {
+                  col: 'RS Ratio',
                   color: '#8b5cf6',
-                  formula: '100 + (RS_today - SMA14(RS)) / StdDev14(RS)  where RS = sector_avg_close / Nifty500_close',
-                  means: 'The current Z-score of the sector\'s raw price ratio vs its own 14-day history. This is the X-axis of the RRG chart. Above 100 = the sector\'s relative strength is above its recent average. Below 100 = below average. Values typically stay in the 95–105 range — small deviations are significant.',
-                  lookfor: 'Above 100 = outperformer (green). Below 100 = underperformer (red). Combined with RS Momentum to determine quadrant.',
-                  example: '101.32 = RS is 1.32 std devs above its 14d mean → outperforming · 99.78 = below average → underperforming',
+                  formula: '100 + (RS_today - SMA14(RS)) / StdDev14(RS)  where RS = avg(stock_return) / nifty500_return',
+                  means: 'The current Z-score of the sector\'s relative strength vs its own 14-day history. Above 100 = sector\'s outperformance is above its recent average (gaining). Below 100 = below its recent average (fading). Think of it as speed — how fast the sector is moving vs Nifty500 right now compared to its own recent norm.',
+                  lookfor: 'Above 100 = outperformer (green). Below 100 = underperformer (red). Values typically stay in the 95–105 range — small deviations are significant.',
+                  example: '101.32 = RS is above its 14d mean → outperforming · 99.78 = below its 14d mean → fading',
                 },
                 {
-                  col: '10D DIR',
-                  color: '#0ea5e9',
-                  formula: 'Linear regression slope of the last 10 RS Ratio values, expressed as %/day of the mean',
-                  means: 'Shows which direction the RS Ratio is trending over the last 10 trading days and how fast. This is a supplementary indicator — the quadrant already captures direction via RS Momentum, but 10D Dir shows the raw speed of the move.',
-                  lookfor: '▲ Rising = RS Ratio moving up vs Nifty. ▼ Falling = moving down. Use to confirm quadrant transitions.',
-                  example: '▲ Rising (0.03%/d) = slow upward drift · ▲ Rising (0.15%/d) = strong upward momentum',
-                },
-                {
-                  col: 'RS MOMENTUM',
+                  col: 'RS Momentum (10D)',
                   color: '#10b981',
-                  formula: '100 + (ROC - SMA14(ROC)) / StdDev14(ROC)  — Z-score of the 10d ROC, centred at 100',
-                  means: 'This is the Y-axis of the RRG chart (original JdK formula). It measures whether the current ROC is unusually high or low compared to recent ROC history. Above 100 = the rate of change is accelerating relative to its own norm. Below 100 = decelerating. Because it is Z-scored, even a positive ROC can produce RS Momentum < 100 if that ROC is weaker than usual.',
-                  lookfor: 'Above 100 = momentum accelerating (green). Below 100 = decelerating (red). Combined with RS Ratio: both > 100 = LEADING. RS Ratio < 100 but RS Momentum > 100 = IMPROVING (early entry). RS Ratio > 100 but RS Momentum < 100 = WEAKENING (exit signal).',
-                  example: '101.57 = ROC is above its 14d norm → momentum building · 98.95 = ROC is below its 14d norm → momentum fading',
+                  formula: '100 + (ROC10 - SMA14(ROC10)) / StdDev14(ROC10)  where ROC10 = 10-day rate of change of RS Ratio',
+                  means: 'The Z-score of the RS Ratio\'s own rate of change — measures whether the sector is accelerating or decelerating vs Nifty500. Think of RS Ratio as speed and RS Momentum as acceleration. A car going fast but slowing down = RS Ratio > 100, RS Momentum < 100 (Weakening). A car going slow but speeding up = RS Ratio < 100, RS Momentum > 100 (Improving).',
+                  lookfor: 'Above 100 = momentum accelerating (green). Below 100 = decelerating (red). Both RS Ratio and RS Momentum > 100 = LEADING (strongest). RS Ratio < 100 but RS Momentum > 100 = IMPROVING (early entry opportunity).',
+                  example: '101.57 = ROC above its 14d norm → momentum building · 98.95 = ROC below its 14d norm → momentum fading',
                 },
                 {
-                  col: 'QUADRANT',
+                  col: 'Quadrant',
                   color: '#16a34a',
-                  formula: 'RS Ratio vs 100 (benchmark line) + RS Momentum vs 100 (acceleration line)',
+                  formula: 'RS Ratio vs 100 (relative strength line) + RS Momentum (10D) vs 100 (acceleration line)',
                   means: [
-                    { q: 'LEADING',   desc: 'RS Ratio > 100 AND RS Momentum > 100. Sector is outperforming Nifty AND that outperformance is accelerating. This is the strongest quadrant — overweight.' },
-                    { q: 'WEAKENING', desc: 'RS Ratio > 100 BUT RS Momentum < 100. Still outperforming but momentum is fading. The sector is losing steam. Consider reducing or watching for rotation out.' },
-                    { q: 'IMPROVING', desc: 'RS Ratio < 100 BUT RS Momentum > 100. Still underperforming Nifty but recovering momentum. Early rotation signal — watch for crossover into LEADING.' },
+                    { q: 'LEADING',   desc: 'RS Ratio > 100 AND RS Momentum > 100. Sector is outperforming Nifty500 AND accelerating. Strongest quadrant — overweight.' },
+                    { q: 'WEAKENING', desc: 'RS Ratio > 100 BUT RS Momentum < 100. Still outperforming but momentum is fading. Like a fast car slowing down — consider reducing exposure.' },
+                    { q: 'IMPROVING', desc: 'RS Ratio < 100 BUT RS Momentum > 100. Below recent average but accelerating. Like a slow car speeding up — best early entry signal before rotation into LEADING.' },
                     { q: 'LAGGING',   desc: 'RS Ratio < 100 AND RS Momentum < 100. Underperforming and getting worse. Avoid. Rotation cycle: LAGGING → IMPROVING → LEADING → WEAKENING → LAGGING.' },
                   ],
-                  lookfor: 'LEADING = overweight. IMPROVING = watch for entry. WEAKENING = reduce. LAGGING = avoid.',
+                  lookfor: 'Best entry: IMPROVING (early) or fresh LEADING (confirmed). Exit signal: WEAKENING. Avoid: LAGGING.',
                 },
                 {
-                  col: '% FROM HIGH',
+                  col: '% from High',
                   color: '#ef4444',
                   formula: '(RS_Ratio_today - max_RS_Ratio_in_63d) / max_RS_Ratio_in_63d × 100',
-                  means: 'How far today\'s RS Ratio is from its 63-day peak. 0.0% (shown as —) means at its strongest right now. -14.6% means the RS Ratio has dropped 14.6% from its peak.',
-                  lookfor: '— or near 0% = sector at peak relative strength right now, combine with LEADING for strongest signal. Large negatives on LEADING sectors = pulling back but still strong fundamentally.',
-                  example: '— = at 63d RS high right now · -14.6% = RS Ratio has fallen 14.6% from its 63d peak (like Diversified)',
+                  means: 'How far today\'s RS Ratio Z-score is from its 63-day peak. Shown as — when at the peak. A large negative means the sector had a stronger relative strength run earlier in the window but has since pulled back.',
+                  lookfor: '— or near 0% + LEADING quadrant = sector at peak relative strength right now, freshest signal. Large negative on a LEADING sector = still strong but extended, higher risk entry.',
+                  example: '— = at 63d RS high right now (strongest signal) · -14.6% = RS Ratio has fallen 14.6% from its 63d peak',
                 },
               ].map((item, i, arr) => (
                 <div key={i} style={{ padding: '14px 0', borderBottom: i < arr.length - 1 ? `1px solid ${t.border}` : 'none', display: 'flex', flexDirection: 'column', gap: 7 }}>
