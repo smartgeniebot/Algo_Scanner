@@ -357,6 +357,27 @@ async def refresh_nse_tickers():
     return {"status": "triggered"}
 
 
+@app.post("/api/trigger-sector-rs")
+async def trigger_sector_rs():
+    token = os.environ.get("GITHUB_TOKEN")
+    repo  = os.environ.get("GITHUB_REPO")
+    if not token or not repo:
+        return {"status": "error", "message": "Server missing GITHUB_TOKEN or GITHUB_REPO env vars"}
+    gh_headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+    resp = requests.post(
+        f"https://api.github.com/repos/{repo}/actions/workflows/sector_rs_engine.yml/dispatches",
+        headers=gh_headers, json={"ref": "main"}, timeout=15
+    )
+    if resp.status_code != 204:
+        return {"status": "error", "message": f"GitHub error: {resp.text}"}
+    return {"status": "triggered"}
+
+
+@app.get("/api/sector-rs-status")
+async def sector_rs_status():
+    return _get_workflow_status("sector_rs_engine.yml")
+
+
 @app.get("/api/refresh-progress")
 async def refresh_progress(since_id: int = 0):
     """Return new job_progress lines since the given id (for incremental polling)."""

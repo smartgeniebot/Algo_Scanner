@@ -33,6 +33,7 @@ function App() {
   const [intradayLog, setIntradayLog] = useState([]);
   const [refreshTickerStatus, setRefreshTickerStatus] = useState('idle');
   const [refreshLog, setRefreshLog] = useState([]);
+  const [sectorRsStatus, setSectorRsStatus] = useState('idle');
 
   const [scannerSubTab, setScannerSubTab] = useState('all');
 
@@ -239,6 +240,16 @@ function App() {
       clearInterval(progressInterval);
       setIntradayStatus('error');
     });
+  };
+
+  const handleTriggerSectorRs = async () => {
+    setSectorRsStatus('loading');
+    try {
+      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/trigger-sector-rs', { method: 'POST' });
+      const d = await r.json();
+      if (d.status !== 'triggered') { setSectorRsStatus('error'); return; }
+    } catch (e) { setSectorRsStatus('error'); return; }
+    setTimeout(() => setSectorRsStatus('idle'), 4000);
   };
 
   const handleRefreshNseTickers = async () => {
@@ -1122,6 +1133,36 @@ function App() {
                   {intradayStatus === 'loading' && <div style={{ color: '#eab308', marginTop: '4px' }}>▌</div>}
                 </div>
               )}
+            </div>
+
+            <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '15px', color: t.textMain, marginBottom: '4px' }}>Sector RS Snapshot</div>
+                <div style={{ fontSize: '13px', color: t.textMuted, lineHeight: '1.5' }}>
+                  Triggers the <strong>sector_rs_engine</strong> workflow on GitHub Actions. Computes RS ratio scores for all sectors, industries and basic industries from the <strong>daily_ohlcv</strong> cache. Runs automatically at <strong>10:00 PM IST</strong> on weekdays — use this to trigger it manually after market engine completes.
+                </div>
+              </div>
+              <button
+                onClick={handleTriggerSectorRs}
+                disabled={sectorRsStatus === 'loading'}
+                style={{
+                  alignSelf: 'flex-start', padding: '10px 22px', borderRadius: '8px', border: 'none',
+                  fontWeight: '700', fontSize: '14px',
+                  cursor: sectorRsStatus === 'loading' ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
+                  backgroundColor:
+                    sectorRsStatus === 'loading' ? '#eab308' :
+                    sectorRsStatus === 'success' ? '#10b981' :
+                    sectorRsStatus === 'error'   ? '#ef4444' :
+                    t.btnPrimaryBg,
+                  color: '#ffffff', display: 'flex', alignItems: 'center', gap: '8px'
+                }}
+              >
+                {sectorRsStatus === 'idle'    && '📊 Run Sector RS Snapshot'}
+                {sectorRsStatus === 'loading' && '⏳ Triggering...'}
+                {sectorRsStatus === 'success' && '✅ Triggered!'}
+                {sectorRsStatus === 'error'   && '❌ Failed — Retry'}
+              </button>
             </div>
 
             <div style={{ backgroundColor: t.bgPanel, border: `1px solid ${t.border}`, borderRadius: '10px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
