@@ -176,44 +176,99 @@ def _confirm_dialog(page) -> bool:
     return False
 
 
-def _do_import(page, frame, file_path: Path) -> bool:
-    if not _open_dropdown_any_tab(frame):
-        log.warning("Could not open watchlist dropdown")
-        return False
-    time.sleep(1.0)
-    # Try multiple label variants Fyers has used across versions
-    _, el = _find_el_any_frame(page, [
+def _dump_dropdown_items(page):
+    """Log visible dropdown/menu items for debugging."""
+    for f in page.frames:
+        try:
+            items = f.evaluate("""
+                () => [...document.querySelectorAll(
+                    'div[data-role="menuitem"], li[role="menuitem"], [class*="menu"] [class*="item"], button'
+                )].map(e => e.textContent.trim()).filter(t => t.length > 0 && t.length < 60)
+            """)
+            if items:
+                log.info("Visible items in DOM: %s", items[:20])
+                break
+        except Exception:
+            pass
+
+
+def _click_import_in_popup(page) -> bool:
+    """
+    Fyers new UI: after opening dropdown, click 'Import list' or equivalent.
+    Also handles the case where a 'New watchlist' popup appears with an Import button inside.
+    """
+    import_selectors = [
         'text=Import list',
         'text=Import List',
         'text=Import watchlist',
         'text=Import Watchlist',
+        'text=Import',
         '[data-name="import-list"]',
+        '[data-name="import-watchlist"]',
         '[title="Import list"]',
-    ])
-    if not el:
-        # Dump what's visible in the dropdown for debugging
-        for f in page.frames:
-            try:
-                items = f.evaluate("""
-                    () => [...document.querySelectorAll('div[data-role="menuitem"]')]
-                          .map(e => e.textContent.trim())
-                """)
-                if items:
-                    log.warning("Dropdown items found: %s", items)
-                    break
-            except Exception:
-                pass
-        log.warning("'Import list' not found in dropdown")
+        '[title="Import"]',
+        'button:has-text("Import")',
+    ]
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        _, el = _find_el_any_frame(page, import_selectors)
+        if el:
+            return el
+        time.sleep(0.4)
+    return None
+
+
+def _do_import(page, frame, file_path: Path) -> bool:
+    if not _open_dropdown_any_tab(frame):
+        log.warning("Could not open watchlist dropdown")
         return False
+    time.sleep(1.2)
+
+    el = _click_import_in_popup(page)
+    if not el:
+        _dump_dropdown_items(page)
+        log.warning("'Import' button not found — trying via 'Create new watchlist' popup...")
+
+        # Try: click "Create new" / "New watchlist" button which may reveal Import option
+        _, new_btn = _find_el_any_frame(page, [
+            'text=Create new watchlist',
+            'text=New watchlist',
+            'text=New Watchlist',
+            '[data-name="create-watchlist"]',
+            'button:has-text("New")',
+        ])
+        if new_btn:
+            log.info("Clicking 'New watchlist' to open popup...")
+            new_btn.click()
+            time.sleep(1.2)
+            el = _click_import_in_popup(page)
+
+        if not el:
+            _dump_dropdown_items(page)
+            log.warning("Import button still not found after trying new watchlist popup")
+            return False
+
+    log.info("Found Import button — triggering file chooser...")
     try:
-        with page.expect_file_chooser(timeout=8000) as fc:
+        with page.expect_file_chooser(timeout=10000) as fc:
             el.click()
         fc.value.set_files(str(file_path))
+        time.sleep(1.0)
         log.info("File set: %s (%d symbols)", file_path.name,
                  len(file_path.read_text().strip().split(",")))
         return True
     except Exception as e:
-        log.warning("File chooser failed: %s", e)
+        log.warning("File chooser failed: %s — trying input[type=file] fallback", e)
+        # Fallback: directly set file on hidden input if present
+        try:
+            for f in page.frames:
+                inp = f.query_selector('input[type="file"]')
+                if inp:
+                    inp.set_input_files(str(file_path))
+                    log.info("File set via hidden input fallback")
+                    return True
+        except Exception as e2:
+            log.warning("Hidden input fallback also failed: %s", e2)
         return False
 
 
