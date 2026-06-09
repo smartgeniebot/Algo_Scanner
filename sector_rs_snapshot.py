@@ -21,6 +21,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
+from psycopg2.extras import execute_values
 import pandas as pd
 from fyers_apiv3 import fyersModel
 
@@ -220,7 +221,7 @@ def run(backfill=False):
 
             if (g_idx + 1) % 50 == 0 or (g_idx + 1) == n_groups:
                 pct = round((g_idx + 1) / n_groups * 100)
-                log(f"     {g_idx+1}/{n_groups} groups ({pct}%) — {len(batch)} rows computed")
+                log(f"     {g_idx+1}/{n_groups} groups ({pct}%) — {len(batch)} rows computed so far")
 
         log(f"   {group_type} computed: {len(batch)} rows | {skipped} skipped | {time.time()-t0:.2f}s")
         all_batches[group_type] = batch
@@ -230,12 +231,18 @@ def run(backfill=False):
     total_written = 0
     for group_type, batch in all_batches.items():
         t0 = time.time()
-        cursor.executemany("""
+        execute_values(
+            cursor,
+            """
             INSERT INTO sector_rs_history (group_type, group_name, trade_date, rs_ratio, stock_count)
-            VALUES (%s, %s, %s::date, %s, %s)
+            VALUES %s
             ON CONFLICT (group_type, group_name, trade_date)
             DO UPDATE SET rs_ratio = EXCLUDED.rs_ratio, stock_count = EXCLUDED.stock_count
-        """, batch)
+            """,
+            [(gt, gn, td, rs, sc) for gt, gn, td, rs, sc in batch],
+            template="(%s, %s, %s::date, %s, %s)",
+            page_size=1000,
+        )
         conn.commit()
         total_written += len(batch)
         log(f"   {group_type}: {len(batch)} rows written in {time.time()-t0:.2f}s")
