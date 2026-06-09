@@ -39,7 +39,7 @@ def _get_log_conn():
     return _log_conn
 
 def log(msg):
-    print(msg)
+    print(msg, flush=True)
     try:
         c = _get_log_conn()
         cur = c.cursor()

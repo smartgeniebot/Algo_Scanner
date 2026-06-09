@@ -40,5 +40,6 @@ jobs:
       - name: 📐 Sector RS Ratio Snapshot
         env:
           NEON_URL: ${{ secrets.NEON_URL }}
+          PYTHONUNBUFFERED: "1"
         run: |
           python sector_rs_snapshot.py ${{ github.event.inputs.mode }}
