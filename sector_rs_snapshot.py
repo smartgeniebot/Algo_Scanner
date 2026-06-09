@@ -25,7 +25,6 @@ from pathlib import Path
 import psycopg2
 import pandas as pd
 from fyers_apiv3 import fyersModel
-from tqdm import tqdm
 
 from config import NEON_URL
 
@@ -129,10 +128,13 @@ def do_fetch(backfill):
     range_from = (today_ist - timedelta(days=cal_days)).strftime("%Y-%m-%d")
     range_to   = today_ist.strftime("%Y-%m-%d")
 
+    log(f"{'='*55}")
+    log(f"Phase 1: Fetch  |  backfill={backfill}  |  window={LOOKBACK}d")
+    log(f"{'='*55}")
+
     fyers = get_fyers()
 
-    # Nifty index is not in daily_ohlcv — fetch from Fyers as before
-    log("📥 Fetching Nifty500 benchmark closes from Fyers...")
+    log("📥 [1/4] Fetching Nifty500 benchmark from Fyers...")
     nifty_closes = fetch_daily_closes(fyers, NIFTY500, range_from, range_to)
     if nifty_closes.empty:
         log("⚠️  Nifty500 failed, falling back to Nifty50...")
@@ -140,9 +142,9 @@ def do_fetch(backfill):
     if nifty_closes.empty:
         log("❌ Could not fetch benchmark data. Aborting.")
         return False
-    log(f"✅ Nifty benchmark: {len(nifty_closes)} days ({nifty_closes.index[0]} → {nifty_closes.index[-1]})")
+    log(f"✅ Nifty500: {len(nifty_closes)} days  ({nifty_closes.index[0]} to {nifty_closes.index[-1]})")
 
-    # Load stock list + closes from DB cache — no Fyers calls for individual stocks
+    log("📋 [2/4] Loading stock list from DB...")
     conn   = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
     cursor.execute("""
@@ -152,36 +154,39 @@ def do_fetch(backfill):
           AND fyers_symbol IS NOT NULL
     """)
     stock_rows = cursor.fetchall()
-    log(f"📊 Loaded {len(stock_rows)} stocks from DB")
+    log(f"✅ {len(stock_rows)} stocks loaded")
 
-    # Build group mappings
+    log("🗂️  [3/4] Building sector/industry/basic_industry group maps...")
     groups = {"sector": {}, "industry": {}, "basic_industry": {}}
     for sym, sec, ind, bi in stock_rows:
         if sec: groups["sector"].setdefault(sec, []).append(sym)
         if ind: groups["industry"].setdefault(ind, []).append(sym)
         if bi:  groups["basic_industry"].setdefault(bi, []).append(sym)
+    log(f"✅ Groups: {len(groups['sector'])} sectors | {len(groups['industry'])} industries | {len(groups['basic_industry'])} basic industries")
 
-    # Load closes from daily_ohlcv cache
-    log(f"\n📂 Loading daily closes from daily_ohlcv cache for {len(stock_rows)} stocks...")
+    log(f"📂 [4/4] Loading daily closes from daily_ohlcv for {len(stock_rows)} stocks...")
     stock_closes = {}
     seen = set()
-    for sym, *_ in tqdm(stock_rows):
+    total = len(stock_rows)
+    for i, (sym, *_) in enumerate(stock_rows):  # noqa
         if sym in seen:
             continue
         seen.add(sym)
         closes = fetch_daily_closes_from_db(conn, sym)
         if not closes.empty:
             stock_closes[sym] = closes
+        if (i + 1) % 500 == 0 or (i + 1) == total:
+            pct = round((i + 1) / total * 100)
+            log(f"  {i+1}/{total} ({pct}%) — {len(stock_closes)} with data")
 
     cursor.close()
     conn.close()
-    log(f"✅ Got closes for {len(stock_closes)} / {len(seen)} stocks")
+    log(f"✅ Closes loaded: {len(stock_closes)}/{len(seen)} stocks have data")
 
     if not stock_closes:
         log("❌ daily_ohlcv cache is empty — market_engine must run first. Aborting.")
         return False
 
-    # Save everything to cache
     cache = {
         "nifty_closes": nifty_closes,
         "groups":       groups,
@@ -219,34 +224,42 @@ def do_write():
         return
     nifty_anchor = float(nifty_closes[anchor_date])
 
-    log("🔌 Connecting to DB...")
+    log(f"{'='*55}")
+    log(f"Phase 2: Compute & Write  |  anchor={anchor_date}  |  write_dates={len(write_dates)}")
+    log(f"{'='*55}")
+
+    log("🔌 [1/3] Connecting to DB...")
     conn   = psycopg2.connect(NEON_URL)
     cursor = conn.cursor()
     ensure_table(cursor, conn)
 
-    # Precompute per-stock: anchor close, date set, and per-date closes — all as plain
-    # Python dicts/sets so every lookup is O(1) instead of O(n) pandas index search.
-    stock_anchor = {}   # sym -> float anchor close
-    stock_dates  = {}   # sym -> set of dates
-    stock_day    = {}   # sym -> {date: float close}
+    log(f"⚙️  [2/3] Precomputing O(1) lookup dicts for {len(stock_closes)} stocks...")
+    stock_anchor = {}
+    stock_dates  = {}
+    stock_day    = {}
     for sym, closes in stock_closes.items():
         if anchor_date not in closes.index:
             continue
         stock_anchor[sym] = float(closes[anchor_date])
-        dates_set = set(closes.index)
+        dates_set         = set(closes.index)
         stock_dates[sym]  = dates_set
         stock_day[sym]    = {d: float(closes[d]) for d in dates_set}
+    log(f"✅ {len(stock_anchor)} stocks have anchor-date data and are eligible")
 
-    for group_type, group_dict in groups.items():
-        batch = []
-        n_groups = len(group_dict)
+    log(f"📐 [3/3] Computing RS ratios and writing to DB...")
+    group_types = list(groups.items())
+    total_types = len(group_types)
+
+    for t_idx, (group_type, group_dict) in enumerate(group_types):
+        n_groups   = len(group_dict)
+        log(f"  [{t_idx+1}/{total_types}] {group_type} — {n_groups} groups x {len(write_dates)} dates")
+        batch      = []
+        skipped    = 0
+
         for g_idx, (group_name, symbols) in enumerate(group_dict.items()):
-            # Eligible = stocks that have a close on the anchor date.
-            # Anchor presence is the key gate — without it we cannot compute a
-            # return. New listings are excluded until they have anchor-date data,
-            # and their first contribution is always ~1.0 (neutral), never a spike.
             eligible = [sym for sym in symbols if sym in stock_anchor]
             if not eligible:
+                skipped += 1
                 continue
 
             for trade_date in write_dates:
@@ -256,12 +269,10 @@ def do_write():
                 if not nifty_now:
                     continue
 
-                # Only stocks that also have data on this trade_date
                 paired = [sym for sym in eligible if trade_date in stock_dates[sym]]
                 if not paired:
                     continue
 
-                # Each stock contributes its % return from anchor — price-neutral
                 avg_return   = sum(stock_day[sym][trade_date] / stock_anchor[sym]
                                    for sym in paired) / len(paired)
                 nifty_return = nifty_now / nifty_anchor
@@ -272,8 +283,9 @@ def do_write():
                     round(float(rs_ratio), 6), int(len(paired)),
                 ))
 
+            pct = round((g_idx + 1) / n_groups * 100)
             if (g_idx + 1) % 50 == 0 or (g_idx + 1) == n_groups:
-                log(f"  {group_type}: {g_idx+1}/{n_groups} groups computed...")
+                log(f"    {g_idx+1}/{n_groups} groups ({pct}%) — {len(batch)} rows so far")
 
         cursor.executemany("""
             INSERT INTO sector_rs_history (group_type, group_name, trade_date, rs_ratio, stock_count)
@@ -282,7 +294,7 @@ def do_write():
             DO UPDATE SET rs_ratio = EXCLUDED.rs_ratio, stock_count = EXCLUDED.stock_count
         """, batch)
         conn.commit()
-        log(f"  ✅ {group_type}: {len(batch)} rows upserted")
+        log(f"  ✅ {group_type} done: {len(batch)} rows upserted | {skipped} groups skipped (no anchor data)")
 
     cursor.close()
     conn.close()
