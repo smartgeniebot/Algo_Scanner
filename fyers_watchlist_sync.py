@@ -395,15 +395,12 @@ def _delete_old_watchlists(page, keep: set):
     log.info("Cleanup done.")
 
 
+FYERS_IMPORT_DIR = Path(r"C:\Users\merly\Desktop\Fyers Import")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def sync_watchlists(symbols: list[str]):
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        log.error("playwright not installed. Run: pip install playwright && python -m playwright install chromium")
-        return
-
     if not symbols:
         log.info("No symbols — nothing to sync.")
         return
@@ -411,111 +408,123 @@ def sync_watchlists(symbols: list[str]):
     today = _today_str()
     ts    = _ist_now().strftime("%H%M")
 
-    # Split into chunks of 250 and build (name, file) pairs
+    # Split into chunks of 250 and write files to Fyers Import folder
+    FYERS_IMPORT_DIR.mkdir(parents=True, exist_ok=True)
     chunks = _chunk(symbols, MAX_PER_LIST)
-    watchlists = []
+    written = []
     for i, chunk in enumerate(chunks, start=1):
         suffix = f"_P{i}" if len(chunks) > 1 else ""
         name   = f"{today}_SCAN{suffix}_{ts}"
-        path   = _write_watchlist_file(name, chunk)
-        watchlists.append((name, path))
-        log.info("Chunk %d/%d: '%s' — %d symbols", i, len(chunks), name, len(chunk))
+        path   = FYERS_IMPORT_DIR / f"{name}.txt"
+        path.write_text(",".join(chunk))
+        written.append(path)
+        log.info("Chunk %d/%d: '%s' — %d symbols written to %s",
+                 i, len(chunks), name, len(chunk), path)
 
-    _clear_session_lock()
+    log.info("=" * 60)
+    log.info("Files ready for manual import:")
+    for p in written:
+        log.info("  %s", p)
+    log.info("Open Fyers → Watchlist → Import → select the file above.")
+    log.info("=" * 60)
 
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            str(SESSION_DIR),
-            headless=False,
-            no_viewport=True,
-            args=[
-                "--start-maximized",
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-infobars",
-                "--disable-dev-shm-usage",
-            ],
-            ignore_default_args=["--enable-automation"],
-        )
-        ctx.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(FYERS_URL, timeout=30000)
-        page.wait_for_load_state("domcontentloaded")
-        time.sleep(2)
-
-        # ── Wait for manual login ─────────────────────────────────────────────
-        if not _is_logged_in(page):
-            log.info("=" * 60)
-            log.info("Please log in to Fyers in the browser window.")
-            log.info("Waiting up to 10 minutes...")
-            log.info("=" * 60)
-
-            deadline = time.time() + 600
-            logged_in = False
-            while time.time() < deadline:
-                # Check all open tabs — Fyers sometimes opens a new tab after login
-                for pg in list(ctx.pages):
-                    try:
-                        if _is_logged_in(pg):
-                            page = pg
-                            logged_in = True
-                            break
-                    except Exception:
-                        pass
-                if logged_in:
-                    log.info("Login detected — URL: %s", page.url)
-                    break
-                time.sleep(1)
-
-            if not logged_in:
-                log.error("Login wait timed out. Exiting.")
-                try:
-                    page.screenshot(path=str(SNAPSHOT_DIR / "login_timeout.png"))
-                except Exception:
-                    pass
-                ctx.close()
-                return
-
-        log.info("Logged in — waiting for trading platform to fully load...")
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=30000)
-        except Exception:
-            pass
-
-        # If login landed on a non-trade page (e.g. fyers.in/charts), navigate to trade
-        if "trade.fyers.in" not in page.url:
-            log.info("Landed on %s — navigating to trade.fyers.in for watchlist access...", page.url)
-            page.goto(FYERS_URL, timeout=30000)
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=30000)
-            except Exception:
-                pass
-
-        # Wait until the watchlist button actually appears in the SPA — up to 90 seconds.
-        # This is the reliable signal that the UI is ready, replacing a fixed sleep.
-        log.info("Waiting for watchlist UI to be ready...")
-        if not _wait_for_watchlist_button(page, timeout=90):
-            log.warning("Watchlist button not found after 90s — attempting import anyway.")
-        else:
-            log.info("Watchlist UI ready.")
-            time.sleep(1)  # brief settle after button appears
-
-        log.info("Starting import of %d watchlist(s).", len(watchlists))
-
-        # ── Import all chunks ─────────────────────────────────────────────────
-        imported_names = set()
-        for wl_name, wl_path in watchlists:
-            ok = _import_watchlist(page, wl_name, wl_path)
-            if ok:
-                imported_names.add(wl_name)
-            time.sleep(1.5)
-
-        ctx.close()
-        log.info("Done — %d watchlist(s) synced, %d total symbols.",
-                 len(imported_names), len(symbols))
+    # ── Browser automation paused — to be fixed later ────────────────────────
+    # TODO: re-enable once Fyers import UI is re-mapped
+    #
+    # try:
+    #     from playwright.sync_api import sync_playwright
+    # except ImportError:
+    #     log.error("playwright not installed. Run: pip install playwright && python -m playwright install chromium")
+    #     return
+    #
+    # _clear_session_lock()
+    #
+    # with sync_playwright() as p:
+    #     ctx = p.chromium.launch_persistent_context(
+    #         str(SESSION_DIR),
+    #         headless=False,
+    #         no_viewport=True,
+    #         args=[
+    #             "--start-maximized",
+    #             "--disable-blink-features=AutomationControlled",
+    #             "--no-sandbox",
+    #             "--disable-infobars",
+    #             "--disable-dev-shm-usage",
+    #         ],
+    #         ignore_default_args=["--enable-automation"],
+    #     )
+    #     ctx.add_init_script(
+    #         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    #     )
+    #
+    #     page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    #     page.goto(FYERS_URL, timeout=30000)
+    #     page.wait_for_load_state("domcontentloaded")
+    #     time.sleep(2)
+    #
+    #     # ── Wait for manual login ─────────────────────────────────────────────
+    #     if not _is_logged_in(page):
+    #         log.info("=" * 60)
+    #         log.info("Please log in to Fyers in the browser window.")
+    #         log.info("Waiting up to 10 minutes...")
+    #         log.info("=" * 60)
+    #
+    #         deadline = time.time() + 600
+    #         logged_in = False
+    #         while time.time() < deadline:
+    #             for pg in list(ctx.pages):
+    #                 try:
+    #                     if _is_logged_in(pg):
+    #                         page = pg
+    #                         logged_in = True
+    #                         break
+    #                 except Exception:
+    #                     pass
+    #             if logged_in:
+    #                 log.info("Login detected — URL: %s", page.url)
+    #                 break
+    #             time.sleep(1)
+    #
+    #         if not logged_in:
+    #             log.error("Login wait timed out. Exiting.")
+    #             try:
+    #                 page.screenshot(path=str(SNAPSHOT_DIR / "login_timeout.png"))
+    #             except Exception:
+    #                 pass
+    #             ctx.close()
+    #             return
+    #
+    #     log.info("Logged in — waiting for trading platform to fully load...")
+    #     try:
+    #         page.wait_for_load_state("domcontentloaded", timeout=30000)
+    #     except Exception:
+    #         pass
+    #
+    #     if "trade.fyers.in" not in page.url:
+    #         log.info("Landed on %s — navigating to trade.fyers.in...", page.url)
+    #         page.goto(FYERS_URL, timeout=30000)
+    #         try:
+    #             page.wait_for_load_state("domcontentloaded", timeout=30000)
+    #         except Exception:
+    #             pass
+    #
+    #     log.info("Waiting for watchlist UI to be ready...")
+    #     if not _wait_for_watchlist_button(page, timeout=90):
+    #         log.warning("Watchlist button not found after 90s — attempting import anyway.")
+    #     else:
+    #         log.info("Watchlist UI ready.")
+    #         time.sleep(1)
+    #
+    #     imported_names = set()
+    #     for wl_name, wl_path in watchlists:
+    #         ok = _import_watchlist(page, wl_name, wl_path)
+    #         if ok:
+    #             imported_names.add(wl_name)
+    #         time.sleep(1.5)
+    #
+    #     ctx.close()
+    #     log.info("Done — %d watchlist(s) synced, %d total symbols.",
+    #              len(imported_names), len(symbols))
 
 
 if __name__ == "__main__":
