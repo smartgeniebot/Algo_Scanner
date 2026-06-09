@@ -200,25 +200,26 @@ def do_fetch(backfill):
 
 
 def do_write():
-    """Phase 2 — load cache and write to Neon. Can be retried independently."""
+    """Phase 2 — compute RS ratios and write to Neon.
+    Reads only the needed dates directly from daily_ohlcv — no pkl loading into RAM.
+    """
     if not CACHE_FILE.exists():
         log("❌ No cache file found. Run without --write-only first.")
         return
 
-    log(f"📂 Loading cache from {CACHE_FILE}...")
+    log(f"📂 Loading cache metadata from {CACHE_FILE}...")
     with open(CACHE_FILE, "rb") as f:
         cache = pickle.load(f)
 
     nifty_closes = cache["nifty_closes"]
     groups       = cache["groups"]
-    stock_closes = cache["stock_closes"]
     backfill     = cache["backfill"]
+    # stock_closes from cache is NOT used — we query DB directly for memory efficiency
 
     all_dates_window = sorted(nifty_closes.index)[-LOOKBACK:]
-    anchor_date      = all_dates_window[0]   # fixed base — all returns measured from here
+    anchor_date      = all_dates_window[0]
     write_dates      = all_dates_window if backfill else [all_dates_window[-1]]
 
-    # Nifty return base — fixed for the whole write phase
     if anchor_date not in nifty_closes.index:
         log("❌ Anchor date not found in Nifty closes. Aborting.")
         return
@@ -233,23 +234,31 @@ def do_write():
     cursor = conn.cursor()
     ensure_table(cursor, conn)
 
-    # Only precompute closes for dates we actually need: anchor + write_dates.
-    # Precomputing all 495 dates per stock × 2243 stocks blows memory on GitHub Actions.
-    needed_dates = set(write_dates) | {anchor_date}
-    log(f"⚙️  [2/3] Precomputing lookup dicts for {len(stock_closes)} stocks x {len(needed_dates)} needed dates...")
-    stock_anchor = {}   # sym -> anchor close
-    stock_dates  = {}   # sym -> set of dates (needed only)
-    stock_day    = {}   # sym -> {date: close} (needed only)
-    for sym, closes in stock_closes.items():
-        if anchor_date not in closes.index:
+    # Query only the needed dates from daily_ohlcv — avoids loading full history into RAM.
+    # anchor_date is a Python date; daily_ohlcv stores Unix timestamps (seconds).
+    needed_dates = sorted(set(write_dates) | {anchor_date})
+    # Convert dates to epoch-second ranges for each date (full trading day = any ts on that date)
+    log(f"⚙️  [2/3] Loading closes for {len(needed_dates)} needed dates from daily_ohlcv...")
+    # Fetch all needed closes in one query using date-cast
+    cursor.execute("""
+        SELECT fyers_symbol, to_timestamp(date)::date AS trade_date, close
+        FROM daily_ohlcv
+        WHERE to_timestamp(date)::date = ANY(%s)
+        ORDER BY fyers_symbol, date
+    """, (needed_dates,))
+    rows = cursor.fetchall()
+    log(f"✅ {len(rows)} rows fetched for {len(needed_dates)} dates")
+
+    # Build stock_anchor and stock_day from DB rows directly
+    stock_anchor = {}   # sym -> float anchor close
+    stock_day    = {}   # sym -> {date: float close}
+    for sym, trade_date, close in rows:
+        if close is None:
             continue
-        stock_anchor[sym] = float(closes[anchor_date])
-        day_map = {}
-        for d in needed_dates:
-            if d in closes.index:
-                day_map[d] = float(closes[d])
-        stock_dates[sym] = set(day_map.keys())
-        stock_day[sym]   = day_map
+        stock_day.setdefault(sym, {})[trade_date] = float(close)
+    for sym, day_map in stock_day.items():
+        if anchor_date in day_map:
+            stock_anchor[sym] = day_map[anchor_date]
     log(f"✅ {len(stock_anchor)} stocks have anchor-date data and are eligible")
 
     log(f"📐 [3/3] Computing RS ratios and writing to DB...")
@@ -275,7 +284,7 @@ def do_write():
                 if not nifty_now:
                     continue
 
-                paired = [sym for sym in eligible if trade_date in stock_dates[sym]]
+                paired = [sym for sym in eligible if trade_date in stock_day.get(sym, {})]
                 if not paired:
                     continue
 
