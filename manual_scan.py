@@ -161,7 +161,7 @@ def run_daily_scan():
     fyers = get_fyers()
     today_ist = datetime.now(IST).date()
 
-    n_res = fetch_safe(fyers, {"symbol": "NSE:NIFTY50-INDEX", "resolution": "1D", "date_format": "1",
+    n_res = fetch_safe(fyers, {"symbol": "NSE:NIFTY500-INDEX", "resolution": "1D", "date_format": "1",
                                 "range_from": (today_ist - timedelta(days=300)).strftime("%Y-%m-%d"),
                                 "range_to": today_ist.strftime("%Y-%m-%d"), "cont_flag": "1"})
 
