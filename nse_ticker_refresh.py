@@ -189,6 +189,33 @@ def main():
     conn.commit()
     log(cur, conn, f"[3/3] OK {updated} updated | {unchanged} unchanged | {no_data} no data from NSE")
 
+    # Normalize known ALL-CAPS / inconsistent values from NSE API
+    SECTOR_MAP = {
+        'AUTOMOBILE':          'Automobile and Auto Components',
+        'CONSTRUCTION':        'Construction',
+        'HEALTHCARE SERVICES': 'Healthcare',
+        'SERVICES':            'Services',
+    }
+    INDUSTRY_MAP = {
+        'AUTO ANCILLARIES':                                  'Auto Components',
+        'CONSTRUCTION':                                      'Construction',
+        'HEALTHCARE SERVICES':                               'Healthcare Services',
+        'HOTELS/ RESORTS AND OTHER RECREATIONAL ACTIVITIES': 'Leisure Services',
+        'TRADING':                                           'Commercial Services & Supplies',
+    }
+    norm_count = 0
+    for bad, good in SECTOR_MAP.items():
+        cur.execute('UPDATE stocks SET sector = %s WHERE sector = %s', (good, bad))
+        norm_count += cur.rowcount
+    for bad, good in INDUSTRY_MAP.items():
+        cur.execute('UPDATE stocks SET industry = %s WHERE industry = %s', (good, bad))
+        norm_count += cur.rowcount
+        cur.execute('UPDATE stocks SET basic_industry = %s WHERE basic_industry = %s', (good, bad))
+        norm_count += cur.rowcount
+    conn.commit()
+    if norm_count:
+        log(cur, conn, f"  Normalized {norm_count} inconsistent classification value(s)")
+
     # Fill any remaining NULLs with Unclassified
     cur.execute("""
         UPDATE stocks SET
