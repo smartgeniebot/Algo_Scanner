@@ -606,29 +606,54 @@ def _ensure_watchlist_jobs_table(conn):
     cur.close()
 
 
+FYERS_IMPORT_DIR = r"C:\Users\merly\Desktop\Fyers Import"
+
 @app.post("/api/fyers-watchlist")
 async def fyers_watchlist(request: WatchlistRequest):
-    """Button click: store symbols as a pending job for watchlist_runner.py to pick up."""
+    """Button click: write watchlist file directly to Fyers Import folder for manual import."""
+    import os, datetime
     symbols = [s.strip() for s in request.symbols if s.strip()]
     if not symbols:
         return {"status": "error", "message": "No symbols provided"}
     try:
-        conn = get_db_connection()
-        _ensure_watchlist_jobs_table(conn)
-        cur = conn.cursor()
-        # Cancel any stale pending jobs first
-        cur.execute("UPDATE watchlist_jobs SET status='cancelled' WHERE status='pending'")
-        cur.execute(
-            "INSERT INTO watchlist_jobs (symbols, status) VALUES (%s, 'pending') RETURNING id",
-            (",".join(symbols),)
-        )
-        job_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        return {"status": "success", "job_id": job_id, "count": len(symbols)}
+        os.makedirs(FYERS_IMPORT_DIR, exist_ok=True)
+        ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        now = datetime.datetime.now(ist)
+        filename = now.strftime("%Y-%m-%d_SCAN_%H%M.txt")
+        filepath = os.path.join(FYERS_IMPORT_DIR, filename)
+        # Split into chunks of 250 if needed
+        chunks = [symbols[i:i+250] for i in range(0, len(symbols), 250)]
+        written = []
+        for idx, chunk in enumerate(chunks, start=1):
+            suffix = f"_P{idx}" if len(chunks) > 1 else ""
+            fname  = now.strftime(f"%Y-%m-%d_SCAN{suffix}_%H%M.txt")
+            fpath  = os.path.join(FYERS_IMPORT_DIR, fname)
+            with open(fpath, "w") as f:
+                f.write(",".join(chunk))
+            written.append(fname)
+        return {"status": "success", "files": written, "count": len(symbols),
+                "folder": FYERS_IMPORT_DIR}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+    # ── Runner/job-queue approach paused — files now written directly ─────────
+    # TODO: re-enable when browser automation is fixed
+    # try:
+    #     conn = get_db_connection()
+    #     _ensure_watchlist_jobs_table(conn)
+    #     cur = conn.cursor()
+    #     cur.execute("UPDATE watchlist_jobs SET status='cancelled' WHERE status='pending'")
+    #     cur.execute(
+    #         "INSERT INTO watchlist_jobs (symbols, status) VALUES (%s, 'pending') RETURNING id",
+    #         (",".join(symbols),)
+    #     )
+    #     job_id = cur.fetchone()[0]
+    #     conn.commit()
+    #     cur.close()
+    #     conn.close()
+    #     return {"status": "success", "job_id": job_id, "count": len(symbols)}
+    # except Exception as e:
+    #     return {"status": "error", "message": str(e)}
 
 
 @app.get("/api/fyers-watchlist-status")
