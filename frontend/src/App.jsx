@@ -535,24 +535,21 @@ function App() {
     document.body.removeChild(link);
   };
 
-  const handleFyersWatchlist = async () => {
+  const handleFyersWatchlist = () => {
     if (activeTabStocks.length === 0) return;
     const symbols = activeTabStocks.map(s => s.fyers_symbol).filter(Boolean);
-    setFyersWlStatus('loading');
-    try {
-      const r = await fetch('https://algo-scanner-lnck.onrender.com/api/fyers-watchlist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbols })
-      });
-      const d = await r.json();
-      if (d.status !== 'success') { setFyersWlStatus('error'); setTimeout(() => setFyersWlStatus('idle'), 4000); return; }
-      setFyersWlStatus('success');
-      setTimeout(() => setFyersWlStatus('idle'), 4000);
-    } catch {
-      setFyersWlStatus('error');
-      setTimeout(() => setFyersWlStatus('idle'), 4000);
-    }
+    if (symbols.length === 0) return;
+    const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const time  = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }).replace(':', '');
+    const label = scannerSubTab === 'early' ? 'EarlyBases' : scannerSubTab === 'weekly' ? 'WeeklyBases' : 'Scan';
+    const filename = `${today}_${label}_${time}.txt`;
+    const blob = new Blob([symbols.join(',')], { type: 'text/plain;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const formatDT = (dt) => {
@@ -826,18 +823,14 @@ function App() {
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px' }}>
                     <button
                       onClick={handleFyersWatchlist}
-                      disabled={fyersWlStatus !== 'idle'}
                       style={{
                         padding: '4px 12px',
-                        backgroundColor: fyersWlStatus === 'success' ? '#10b981' : fyersWlStatus === 'error' ? '#ef4444' : fyersWlStatus === 'loading' ? '#eab308' : '#6366f1',
+                        backgroundColor: '#6366f1',
                         color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: '700',
-                        cursor: fyersWlStatus !== 'idle' ? 'not-allowed' : 'pointer'
+                        cursor: 'pointer'
                       }}
                     >
-                      {fyersWlStatus === 'idle'    && 'Fyers Watchlist Import'}
-                      {fyersWlStatus === 'loading' && 'Saving file...'}
-                      {fyersWlStatus === 'success' && '✓ File saved — check Fyers Import folder'}
-                      {fyersWlStatus === 'error'   && 'Failed — try again'}
+                      📥 Fyers Import
                     </button>
                   </div>
                 )}
