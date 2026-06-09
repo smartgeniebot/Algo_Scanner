@@ -188,6 +188,22 @@ def main():
 
     conn.commit()
     log(cur, conn, f"[3/3] OK {updated} updated | {unchanged} unchanged | {no_data} no data from NSE")
+
+    # Fill any remaining NULLs with Unclassified
+    cur.execute("""
+        UPDATE stocks SET
+            sector         = COALESCE(NULLIF(sector, ''),         'Unclassified'),
+            industry       = COALESCE(NULLIF(industry, ''),       'Unclassified'),
+            basic_industry = COALESCE(NULLIF(basic_industry, ''), 'Unclassified')
+        WHERE sector IS NULL OR sector = ''
+           OR industry IS NULL OR industry = ''
+           OR basic_industry IS NULL OR basic_industry = ''
+    """)
+    fallback = cur.rowcount
+    conn.commit()
+    if fallback:
+        log(cur, conn, f"  {fallback} stock(s) set to Unclassified (no NSE data)")
+
     log(cur, conn, f"NSE Ticker Refresh Complete — {total} synced, {deleted} removed")
 
     cur.close()
