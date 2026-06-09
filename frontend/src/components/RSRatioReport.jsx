@@ -296,7 +296,6 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
         const m = r._metrics;
         if (sortKey === 'rsRatioCurrent') return m?.rsRatioCurrent ?? -Infinity;
         if (sortKey === 'rsMomentum')     return m?.rsMomentum ?? -Infinity;
-        if (sortKey === 'roc')            return m?.roc ?? -Infinity;
         if (sortKey === 'pctFromHigh')    return m?.pctFromHigh ?? -Infinity;
         if (sortKey === 'vsNifty500')     return m?.vsNifty500 ?? -Infinity;
         if (sortKey === 'absReturn63d')   return m?.absReturn63d ?? -Infinity;
@@ -508,9 +507,8 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
               <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap', textAlign: 'center' }}>RS Ratio ({DAYS}D)</th>
               <TH label="vs Nifty 500 (63D)"   k="vsNifty500"   align="center" />
               <TH label="Abs Return (63D)"      k="absReturn63d" align="center" />
-              <TH label="RS Ratio"      k="rsRatioCurrent" align="center" />
-              <TH label="10D Dir"       k="roc"            align="center" />
-              <TH label="RS Momentum"   k="rsMomentum"     align="center" />
+              <TH label="RS Ratio"           k="rsRatioCurrent" align="center" />
+              <TH label="RS Momentum (10D)" k="rsMomentum"     align="center" />
               <TH label="Quadrant"      k="quadrant"       align="center" />
               <TH label="% from High"   k="pctFromHigh"    align="center" />
               <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, textAlign: 'center', whiteSpace: 'nowrap' }}>Action</th>
@@ -518,9 +516,9 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
           </thead>
           <tbody>
             {histLoading ? (
-              <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
             ) : displayed.length === 0 ? (
-              <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
             ) : displayed.map((row, idx) => {
               const m = row._metrics;
               const isLast = idx === displayed.length - 1;
@@ -564,10 +562,6 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
 
                   <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: rsRatioClr }}>{rsRatioStr}</span>
-                  </td>
-
-                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-                    {m ? <DirCell slopeRising={m.slopeRising} pctPerDay={m.pctPerDay} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
                   </td>
 
                   <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}
