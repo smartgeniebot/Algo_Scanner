@@ -58,6 +58,14 @@ function computeMetrics(series) {
 
   const raw = series.map(d => d.rs_ratio);
 
+  // ── vs Nifty500 & Absolute Return (63d from anchor) ─────────────────────────
+  // rs_ratio    = avg_stock_return_from_anchor / nifty_return_from_anchor
+  // sector_return = avg_stock_return_from_anchor (raw, e.g. 1.1628 = +16.28%)
+  const latestRaw      = raw[raw.length - 1];
+  const latestSectorRet = series[series.length - 1]?.sector_return ?? null;
+  const vsNifty500     = (latestRaw - 1) * 100;                                   // e.g. +17.7%
+  const absReturn63d   = latestSectorRet != null ? (latestSectorRet - 1) * 100 : null; // e.g. +16.28%
+
   // ── RS Ratio: Z-score of raw ratio using 14-period SMA + StdDev ──
   const rsMean   = rollingMean(raw, JDK_PERIOD);
   const rsStdDev = rollingPStdDev(raw, JDK_PERIOD);
@@ -113,6 +121,8 @@ function computeMetrics(series) {
     slopeRising: slope > 0,
     pctPerDay,
     pctFromHigh,
+    vsNifty500,       // % outperformance vs Nifty500 from anchor (e.g. +17.7)
+    absReturn63d,     // % absolute return of sector from anchor (e.g. +16.28)
     rsRatioSeries,    // Z-score series (used for RS Ratio value, RS Momentum, quadrant)
     sparklineSeries,  // normalized raw ratio (used only for the sparkline visual)
   };
@@ -288,6 +298,8 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
         if (sortKey === 'rsMomentum')     return m?.rsMomentum ?? -Infinity;
         if (sortKey === 'roc')            return m?.roc ?? -Infinity;
         if (sortKey === 'pctFromHigh')    return m?.pctFromHigh ?? -Infinity;
+        if (sortKey === 'vsNifty500')     return m?.vsNifty500 ?? -Infinity;
+        if (sortKey === 'absReturn63d')   return m?.absReturn63d ?? -Infinity;
         if (sortKey === '_name')          return r._name ?? '';
         if (sortKey === 'total_stocks')   return r.total_stocks ?? 0;
         return -Infinity;
@@ -494,6 +506,8 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
               <TH label="Group"         k="_name"          align="center" />
               <TH label="Stocks"        k="total_stocks"   align="center" />
               <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap', textAlign: 'center' }}>RS Ratio ({DAYS}D)</th>
+              <TH label="vs Nifty 500 (63D)"   k="vsNifty500"   align="center" />
+              <TH label="Abs Return (63D)"      k="absReturn63d" align="center" />
               <TH label="RS Ratio"      k="rsRatioCurrent" align="center" />
               <TH label="10D Dir"       k="roc"            align="center" />
               <TH label="RS Momentum"   k="rsMomentum"     align="center" />
@@ -504,9 +518,9 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
           </thead>
           <tbody>
             {histLoading ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
+              <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
             ) : displayed.length === 0 ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
+              <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
             ) : displayed.map((row, idx) => {
               const m = row._metrics;
               const isLast = idx === displayed.length - 1;
@@ -530,6 +544,22 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
 
                   <td style={{ padding: '7px 14px', textAlign: 'center' }}>
                     {m ? <Sparkline rsRatioSeries={m.sparklineSeries} quadrant={m.quadrant} /> : <span style={{ color: t.muted, fontSize: 11 }}>No data</span>}
+                  </td>
+
+                  <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+                    {m != null ? (
+                      <span style={{ fontSize: 13, fontWeight: 700, color: m.vsNifty500 >= 0 ? '#16a34a' : '#dc2626' }}>
+                        {m.vsNifty500 >= 0 ? '+' : ''}{m.vsNifty500.toFixed(1)}%
+                      </span>
+                    ) : <span style={{ color: t.muted }}>—</span>}
+                  </td>
+
+                  <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+                    {m != null && m.absReturn63d != null ? (
+                      <span style={{ fontSize: 13, fontWeight: 700, color: m.absReturn63d >= 0 ? '#16a34a' : '#dc2626' }}>
+                        {m.absReturn63d >= 0 ? '+' : ''}{m.absReturn63d.toFixed(1)}%
+                      </span>
+                    ) : <span style={{ color: t.muted }}>—</span>}
                   </td>
 
                   <td style={{ padding: '11px 14px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>

@@ -100,14 +100,18 @@ def fetch_nifty_closes(fyers):
 def ensure_table(cursor, conn):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sector_rs_history (
-            id           SERIAL PRIMARY KEY,
-            group_type   TEXT    NOT NULL,
-            group_name   TEXT    NOT NULL,
-            trade_date   DATE    NOT NULL,
-            rs_ratio     DOUBLE PRECISION NOT NULL,
-            stock_count  INTEGER NOT NULL,
+            id             SERIAL PRIMARY KEY,
+            group_type     TEXT    NOT NULL,
+            group_name     TEXT    NOT NULL,
+            trade_date     DATE    NOT NULL,
+            rs_ratio       DOUBLE PRECISION NOT NULL,
+            stock_count    INTEGER NOT NULL,
+            sector_return  DOUBLE PRECISION,
             UNIQUE (group_type, group_name, trade_date)
         )
+    """)
+    cursor.execute("""
+        ALTER TABLE sector_rs_history ADD COLUMN IF NOT EXISTS sector_return DOUBLE PRECISION
     """)
     conn.commit()
 
@@ -217,6 +221,7 @@ def run(backfill=False):
                 batch.append((
                     str(group_type), str(group_name), str(trade_date),
                     round(float(rs_ratio), 6), int(len(paired)),
+                    round(float(avg_return), 6),
                 ))
 
             if (g_idx + 1) % 50 == 0 or (g_idx + 1) == n_groups:
@@ -234,13 +239,13 @@ def run(backfill=False):
         execute_values(
             cursor,
             """
-            INSERT INTO sector_rs_history (group_type, group_name, trade_date, rs_ratio, stock_count)
+            INSERT INTO sector_rs_history (group_type, group_name, trade_date, rs_ratio, stock_count, sector_return)
             VALUES %s
             ON CONFLICT (group_type, group_name, trade_date)
-            DO UPDATE SET rs_ratio = EXCLUDED.rs_ratio, stock_count = EXCLUDED.stock_count
+            DO UPDATE SET rs_ratio = EXCLUDED.rs_ratio, stock_count = EXCLUDED.stock_count, sector_return = EXCLUDED.sector_return
             """,
-            [(gt, gn, td, rs, sc) for gt, gn, td, rs, sc in batch],
-            template="(%s, %s, %s::date, %s, %s)",
+            [(gt, gn, td, rs, sc, sr) for gt, gn, td, rs, sc, sr in batch],
+            template="(%s, %s, %s::date, %s, %s, %s)",
             page_size=1000,
         )
         conn.commit()

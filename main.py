@@ -291,7 +291,7 @@ async def get_sector_rs_history(group_type: str = "sector", days: int = 63):
     # Then in Python we keep only the last `days` rows per group so the
     # frontend always gets exactly 63 trading-day points regardless of holidays.
     cursor.execute("""
-        SELECT group_name, trade_date, rs_ratio, stock_count
+        SELECT group_name, trade_date, rs_ratio, stock_count, sector_return
         FROM sector_rs_history
         WHERE group_type = %s
           AND trade_date >= CURRENT_DATE - INTERVAL '100 days'
@@ -307,9 +307,10 @@ async def get_sector_rs_history(group_type: str = "sector", days: int = 63):
     for row in rows:
         name = row["group_name"]
         raw.setdefault(name, []).append({
-            "trade_date":  str(row["trade_date"]),
-            "rs_ratio":    float(row["rs_ratio"]),
-            "stock_count": int(row["stock_count"]),
+            "trade_date":   str(row["trade_date"]),
+            "rs_ratio":     float(row["rs_ratio"]),
+            "stock_count":  int(row["stock_count"]),
+            "sector_return": float(row["sector_return"]) if row["sector_return"] is not None else None,
         })
     return {name: pts[-days:] for name, pts in raw.items()}
 
