@@ -224,20 +224,28 @@ def do_write():
     cursor = conn.cursor()
     ensure_table(cursor, conn)
 
+    # Precompute per-stock: anchor close, date set, and per-date closes — all as plain
+    # Python dicts/sets so every lookup is O(1) instead of O(n) pandas index search.
+    stock_anchor = {}   # sym -> float anchor close
+    stock_dates  = {}   # sym -> set of dates
+    stock_day    = {}   # sym -> {date: float close}
+    for sym, closes in stock_closes.items():
+        if anchor_date not in closes.index:
+            continue
+        stock_anchor[sym] = float(closes[anchor_date])
+        dates_set = set(closes.index)
+        stock_dates[sym]  = dates_set
+        stock_day[sym]    = {d: float(closes[d]) for d in dates_set}
+
     for group_type, group_dict in groups.items():
         batch = []
-        for group_name, symbols in group_dict.items():
-            # Eligible = stocks that have a close on the anchor date AND every
-            # subsequent date in the window. Anchor presence is the key gate —
-            # without it we cannot compute a return, so new listings and stocks
-            # with gaps on the anchor are excluded. This prevents composition
-            # jumps: a stock can only enter when it has anchor-date data, and
-            # its first contribution is always 1.0 (neutral), never a price spike.
-            eligible = [
-                sym for sym in symbols
-                if sym in stock_closes
-                and anchor_date in stock_closes[sym].index
-            ]
+        n_groups = len(group_dict)
+        for g_idx, (group_name, symbols) in enumerate(group_dict.items()):
+            # Eligible = stocks that have a close on the anchor date.
+            # Anchor presence is the key gate — without it we cannot compute a
+            # return. New listings are excluded until they have anchor-date data,
+            # and their first contribution is always ~1.0 (neutral), never a spike.
+            eligible = [sym for sym in symbols if sym in stock_anchor]
             if not eligible:
                 continue
 
@@ -248,33 +256,24 @@ def do_write():
                 if not nifty_now:
                     continue
 
-                # Only use stocks that also have data on this trade_date
-                paired = [
-                    sym for sym in eligible
-                    if trade_date in stock_closes[sym].index
-                ]
+                # Only stocks that also have data on this trade_date
+                paired = [sym for sym in eligible if trade_date in stock_dates[sym]]
                 if not paired:
                     continue
 
-                # Each stock contributes its % return from anchor, not its price.
-                # A ₹50 stock and a ₹5000 stock are treated equally.
-                avg_return   = sum(
-                    float(stock_closes[sym][trade_date]) / float(stock_closes[sym][anchor_date])
-                    for sym in paired
-                ) / len(paired)
-
+                # Each stock contributes its % return from anchor — price-neutral
+                avg_return   = sum(stock_day[sym][trade_date] / stock_anchor[sym]
+                                   for sym in paired) / len(paired)
                 nifty_return = nifty_now / nifty_anchor
-
-                # RS ratio > 1.0 means sector outperforming Nifty from anchor date
-                rs_ratio = avg_return / nifty_return
+                rs_ratio     = avg_return / nifty_return
 
                 batch.append((
-                    str(group_type),
-                    str(group_name),
-                    str(trade_date),
-                    round(float(rs_ratio), 6),
-                    int(len(paired)),
+                    str(group_type), str(group_name), str(trade_date),
+                    round(float(rs_ratio), 6), int(len(paired)),
                 ))
+
+            if (g_idx + 1) % 50 == 0 or (g_idx + 1) == n_groups:
+                log(f"  {group_type}: {g_idx+1}/{n_groups} groups computed...")
 
         cursor.executemany("""
             INSERT INTO sector_rs_history (group_type, group_name, trade_date, rs_ratio, stock_count)
