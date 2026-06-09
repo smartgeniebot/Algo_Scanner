@@ -4,10 +4,10 @@ on:
   # Runs at 16:30 UTC (10:00 PM IST) — job 2 of 3, 4 hrs after market_engine (06:00 PM IST)
   schedule:
     - cron: '30 16 * * 1-5'   # Mon–Fri only (trading days)
-  workflow_dispatch:           # Manual trigger with optional backfill input
+  workflow_dispatch:
     inputs:
-      backfill:
-        description: 'Pass --backfill to populate the last 63 trading days (first-run only)'
+      mode:
+        description: 'Run mode: leave blank for daily, --backfill to fill 63 days, --wipe-and-backfill to reset and recompute all'
         required: false
         default: ''
 
@@ -41,8 +41,4 @@ jobs:
         env:
           NEON_URL: ${{ secrets.NEON_URL }}
         run: |
-          if [ "${{ github.event.inputs.backfill }}" = "--backfill" ]; then
-            python sector_rs_snapshot.py --backfill
-          else
-            python sector_rs_snapshot.py
-          fi
+          python sector_rs_snapshot.py ${{ github.event.inputs.mode }}

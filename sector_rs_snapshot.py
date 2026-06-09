@@ -209,12 +209,15 @@ def do_write():
     stock_closes = cache["stock_closes"]
     backfill     = cache["backfill"]
 
-    # Full 63-day window is always needed to determine eligible stocks —
-    # even on a daily run we must check which stocks have data across the
-    # whole lookback period so composition stays consistent day to day.
     all_dates_window = sorted(nifty_closes.index)[-LOOKBACK:]
-    # Dates we actually write rows for: all 63 on backfill, just today otherwise
-    write_dates = all_dates_window if backfill else [all_dates_window[-1]]
+    anchor_date      = all_dates_window[0]   # fixed base — all returns measured from here
+    write_dates      = all_dates_window if backfill else [all_dates_window[-1]]
+
+    # Nifty return base — fixed for the whole write phase
+    if anchor_date not in nifty_closes.index:
+        log("❌ Anchor date not found in Nifty closes. Aborting.")
+        return
+    nifty_anchor = float(nifty_closes[anchor_date])
 
     log("🔌 Connecting to DB...")
     conn   = psycopg2.connect(NEON_URL)
@@ -224,48 +227,53 @@ def do_write():
     for group_type, group_dict in groups.items():
         batch = []
         for group_name, symbols in group_dict.items():
-            # Only keep stocks that have price data on EVERY date in the full
-            # 63-day window. This locks the universe so composition never jumps.
+            # Eligible = stocks that have a close on the anchor date AND every
+            # subsequent date in the window. Anchor presence is the key gate —
+            # without it we cannot compute a return, so new listings and stocks
+            # with gaps on the anchor are excluded. This prevents composition
+            # jumps: a stock can only enter when it has anchor-date data, and
+            # its first contribution is always 1.0 (neutral), never a price spike.
             eligible = [
                 sym for sym in symbols
-                if sym in stock_closes and
-                   all(d in stock_closes[sym].index for d in all_dates_window)
+                if sym in stock_closes
+                and anchor_date in stock_closes[sym].index
             ]
-            if not eligible:
-                # Fallback: stocks present on at least 90% of the window
-                min_dates = int(len(all_dates_window) * 0.9)
-                eligible = [
-                    sym for sym in symbols
-                    if sym in stock_closes and
-                       sum(1 for d in all_dates_window if d in stock_closes[sym].index) >= min_dates
-                ]
             if not eligible:
                 continue
 
             for trade_date in write_dates:
                 if trade_date not in nifty_closes.index:
                     continue
-                nifty_val = float(nifty_closes[trade_date])
-                if not nifty_val:
+                nifty_now = float(nifty_closes[trade_date])
+                if not nifty_now:
                     continue
 
-                closes_on_date = [
-                    float(stock_closes[sym][trade_date])
-                    for sym in eligible
+                # Only use stocks that also have data on this trade_date
+                paired = [
+                    sym for sym in eligible
                     if trade_date in stock_closes[sym].index
                 ]
-                if not closes_on_date:
+                if not paired:
                     continue
 
-                avg_close = sum(closes_on_date) / len(closes_on_date)
-                rs_ratio  = avg_close / nifty_val
+                # Each stock contributes its % return from anchor, not its price.
+                # A ₹50 stock and a ₹5000 stock are treated equally.
+                avg_return   = sum(
+                    float(stock_closes[sym][trade_date]) / float(stock_closes[sym][anchor_date])
+                    for sym in paired
+                ) / len(paired)
+
+                nifty_return = nifty_now / nifty_anchor
+
+                # RS ratio > 1.0 means sector outperforming Nifty from anchor date
+                rs_ratio = avg_return / nifty_return
 
                 batch.append((
                     str(group_type),
                     str(group_name),
                     str(trade_date),
                     round(float(rs_ratio), 6),
-                    int(len(closes_on_date)),
+                    int(len(paired)),
                 ))
 
         cursor.executemany("""
@@ -280,18 +288,28 @@ def do_write():
     cursor.close()
     conn.close()
     log("\n🏁 Sector RS snapshot complete.")
-    # Remove cache after successful write
     CACHE_FILE.unlink(missing_ok=True)
     log("🗑️  Cache file removed.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backfill",   action="store_true", help="Populate last 63 trading days")
-    parser.add_argument("--write-only", action="store_true", help="Skip fetch, write from saved cache")
+    parser.add_argument("--backfill",        action="store_true", help="Populate last 63 trading days")
+    parser.add_argument("--write-only",      action="store_true", help="Skip fetch, write from saved cache")
+    parser.add_argument("--wipe-and-backfill", action="store_true", help="Wipe sector_rs_history and recompute all 63 days fresh")
     args = parser.parse_args()
 
-    if args.write_only:
+    if args.wipe_and_backfill:
+        conn = psycopg2.connect(NEON_URL)
+        cur  = conn.cursor()
+        cur.execute("TRUNCATE TABLE sector_rs_history")
+        conn.commit()
+        cur.close()
+        conn.close()
+        log("🗑️  sector_rs_history wiped — running full backfill...")
+        if do_fetch(backfill=True):
+            do_write()
+    elif args.write_only:
         do_write()
     else:
         if do_fetch(backfill=args.backfill):
