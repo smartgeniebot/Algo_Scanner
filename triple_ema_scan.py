@@ -114,12 +114,15 @@ def load_ohlcv_from_db(conn, symbol):
 
 
 def check_cache_fresh(conn, cursor):
-    """Verify daily_ohlcv was populated today. Returns False if table missing or stale."""
+    """Verify daily_ohlcv was populated on the last trading day.
+    Accepts data from today or yesterday IST — the base scans run after midnight IST
+    so market_engine data (written at 6 PM IST previous evening) is always from 'yesterday'."""
     try:
         today_ist = datetime.now(IST).date()
-        today_epoch_start = int(datetime.combine(today_ist, datetime.min.time())
-                                .replace(tzinfo=IST).timestamp())
-        cursor.execute("SELECT COUNT(*) FROM daily_ohlcv WHERE date >= %s", (today_epoch_start,))
+        yesterday_ist = today_ist - timedelta(days=1)
+        cutoff_epoch = int(datetime.combine(yesterday_ist, datetime.min.time())
+                           .replace(tzinfo=IST).timestamp())
+        cursor.execute("SELECT COUNT(*) FROM daily_ohlcv WHERE date >= %s", (cutoff_epoch,))
         count = cursor.fetchone()[0]
         return count > 0
     except Exception:
