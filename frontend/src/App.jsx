@@ -129,7 +129,7 @@ function App() {
       Object.values(macros).forEach(micros => micros.forEach(mi => all.add(mi)))
     );
     setSelectedMicros(all);
-    setSelectedFundamentals(['high_growth', 'moderate_growth']);
+    setSelectedFundamentals(['high_growth', 'moderate_growth', 'high_dividend']);
   };
 
   const handleClear = () => {
