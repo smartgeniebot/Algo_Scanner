@@ -147,6 +147,9 @@ def fetch_and_flag_dividend_stocks(conn, cursor):
 
 def fetch_and_flag_fno_stocks(conn, cursor):
     """Downloads NSE F&O securities list and sets is_fno_stock = True for matching stocks."""
+    # Ensure column exists before any operation (safe on repeated runs)
+    cursor.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS is_fno_stock BOOLEAN DEFAULT FALSE")
+    conn.commit()
     print("\n📊 Fetching F&O securities list from NSE...")
     url = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
     headers = {
@@ -161,11 +164,22 @@ def fetch_and_flag_fno_stocks(conn, cursor):
         resp = session.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         syms = []
-        for line in resp.text.splitlines()[1:]:
-            parts = line.split(",")
-            if parts:
-                symbol = parts[0].strip()
-                if symbol and symbol not in ("SYMBOL", ""):
+        in_equity_section = False
+        for line in resp.text.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if not parts or not parts[0]:
+                continue
+            # Section header row that precedes equity symbols
+            if "Derivatives on Individual Securities" in parts[0]:
+                in_equity_section = True
+                continue
+            # Skip column headers and index futures rows
+            if not in_equity_section:
+                continue
+            # parts[1] is the NSE symbol (e.g. "ABB", "RELIANCE")
+            if len(parts) >= 2:
+                symbol = parts[1].strip()
+                if symbol and symbol.upper() not in ("SYMBOL", ""):
                     syms.append(f"NSE:{symbol}-EQ")
         if not syms:
             print("⚠️ No F&O symbols parsed — skipping flag update.")
@@ -185,6 +199,7 @@ def run_all_fundamental_scrapes(conn, cursor):
     cursor.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS is_fno_stock BOOLEAN DEFAULT FALSE")
     cursor.execute("UPDATE stocks SET is_high_roce = False, is_moderate_growth = False, is_dividend_stock = False, is_fno_stock = False")
     conn.commit()
+
 
     # 1. Scrape High Growth
     high_growth_url = "https://www.screener.in/screens/181364/winner-high-roce-high-growth/"

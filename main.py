@@ -760,18 +760,15 @@ async def get_first_daily_base(lookback_days: int = 30, weekly_ema_filter: bool 
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
 
-        weekly_join = ""
-        weekly_cond = ""
-        if weekly_ema_filter:
-            weekly_join = "JOIN stocks s ON s.fyers_symbol = f.fyers_symbol"
-            weekly_cond = "AND s.weekly_ema_bullish = TRUE"
+        weekly_cond = "AND s.weekly_ema_bullish = TRUE" if weekly_ema_filter else ""
 
         cursor.execute(f"""
             SELECT f.fyers_symbol, f.stock_name, f.sector, f.industry, f.basic_industry,
                    f.rs_score, f.first_base_date, f.second_base_date,
-                   f.is_high_roce, f.is_moderate_growth, f.is_dividend_stock
+                   f.is_high_roce, f.is_moderate_growth, f.is_dividend_stock,
+                   COALESCE(s.is_fno_stock, FALSE) AS is_fno_stock
             FROM first_daily_base f
-            {weekly_join}
+            LEFT JOIN stocks s ON s.fyers_symbol = f.fyers_symbol
             WHERE GREATEST(f.first_base_date, COALESCE(f.second_base_date, f.first_base_date)) >= %s
             {weekly_cond}
             ORDER BY GREATEST(f.first_base_date, COALESCE(f.second_base_date, f.first_base_date)) DESC,
@@ -836,17 +833,14 @@ async def get_early_weekly_base(lookback_days: int = 30, weekly_ema_filter: bool
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
 
-        weekly_join = ""
-        weekly_cond = ""
-        if weekly_ema_filter:
-            weekly_join = "JOIN stocks s ON s.fyers_symbol = e.fyers_symbol"
-            weekly_cond = "AND s.weekly_ema_bullish = TRUE"
+        weekly_cond = "AND s.weekly_ema_bullish = TRUE" if weekly_ema_filter else ""
 
         cursor.execute(f"""
             SELECT e.fyers_symbol, e.stock_name, e.sector, e.industry, e.basic_industry,
-                   e.rs_score, e.pullback_date, e.is_high_roce, e.is_moderate_growth, e.is_dividend_stock
+                   e.rs_score, e.pullback_date, e.is_high_roce, e.is_moderate_growth, e.is_dividend_stock,
+                   COALESCE(s.is_fno_stock, FALSE) AS is_fno_stock
             FROM early_weekly_base e
-            {weekly_join}
+            LEFT JOIN stocks s ON s.fyers_symbol = e.fyers_symbol
             WHERE e.pullback_date >= %s
             {weekly_cond}
             ORDER BY e.pullback_date DESC, e.rs_score DESC NULLS LAST
