@@ -17,6 +17,34 @@ from pathlib import Path
 
 app = FastAPI(title="Algo Scanner Cloud API")
 
+# ── Nifty Dividend Opportunities 50 — cached in memory ───────────────────────
+_dividend_symbols: set = set()
+_dividend_cache_ts: float = 0
+_DIVIDEND_URL = "https://www.niftyindices.com/IndexConstituent/ind_niftydivopp50list.csv"
+_DIVIDEND_TTL = 86400  # refresh once per day
+
+def _get_dividend_symbols() -> set:
+    global _dividend_symbols, _dividend_cache_ts
+    if _dividend_symbols and (time.time() - _dividend_cache_ts) < _DIVIDEND_TTL:
+        return _dividend_symbols
+    try:
+        resp = requests.get(_DIVIDEND_URL, timeout=10,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        syms = set()
+        for line in resp.text.splitlines()[1:]:  # skip header
+            parts = line.split(",")
+            if len(parts) >= 3:
+                symbol = parts[2].strip()
+                if symbol and not symbol.startswith("Dummy"):
+                    syms.add(f"NSE:{symbol}-EQ")
+        if syms:
+            _dividend_symbols = syms
+            _dividend_cache_ts = time.time()
+    except Exception as e:
+        print(f"[dividend] fetch failed: {e}", flush=True)
+    return _dividend_symbols
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -51,6 +79,13 @@ async def get_stocks_directory():
     cursor.close()
     conn.close()
     return [dict(r) for r in rows]
+
+
+@app.get("/api/dividend-symbols")
+async def get_dividend_symbols():
+    """Returns the Nifty Dividend Opportunities 50 fyers_symbol list for client-side filtering."""
+    syms = _get_dividend_symbols()
+    return {"status": "success", "symbols": sorted(syms)}
 
 
 @app.get("/api/filters")
@@ -114,6 +149,12 @@ async def get_stocks(request: IndustryRequest):
             fund_conditions.append("is_high_roce = True")
         if "moderate_growth" in request.fundamentals:
             fund_conditions.append("is_moderate_growth = True")
+        if "high_dividend" in request.fundamentals:
+            div_syms = _get_dividend_symbols()
+            if div_syms:
+                placeholders = ", ".join(["%s"] * len(div_syms))
+                fund_conditions.append(f"fyers_symbol IN ({placeholders})")
+                query_params.extend(sorted(div_syms))
         if fund_conditions:
             query_conditions.append("(" + " OR ".join(fund_conditions) + ")")
 

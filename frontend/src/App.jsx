@@ -10,6 +10,7 @@ function App() {
   const [hierarchy, setHierarchy] = useState({});
   const [selectedMicros, setSelectedMicros] = useState(new Set());
   const [selectedFundamentals, setSelectedFundamentals] = useState([]);
+  const [dividendSymbols, setDividendSymbols] = useState(new Set());
   const [sidebarSearch, setSidebarSearch] = useState('');
   const [stocks, setStocks] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -59,6 +60,10 @@ function App() {
       .then(res => res.json())
       .then(res => setHierarchy(res.data || {}))
       .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
+    fetch('https://algo-scanner-lnck.onrender.com/api/dividend-symbols')
+      .then(res => res.json())
+      .then(res => setDividendSymbols(new Set(res.symbols || [])))
+      .catch(() => {});
   }, []);
 
   const doScan = (micros, fundamentals) => {
@@ -618,6 +623,7 @@ function App() {
       items = items.filter(s => {
         if (selectedFundamentals.includes('high_growth') && s.is_high_roce) return true;
         if (selectedFundamentals.includes('moderate_growth') && s.is_moderate_growth) return true;
+        if (selectedFundamentals.includes('high_dividend') && dividendSymbols.has(s.fyers_symbol)) return true;
         return false;
       });
     }
@@ -658,6 +664,7 @@ function App() {
       items = items.filter(s => {
         if (selectedFundamentals.includes('high_growth') && s.is_high_roce) return true;
         if (selectedFundamentals.includes('moderate_growth') && s.is_moderate_growth) return true;
+        if (selectedFundamentals.includes('high_dividend') && dividendSymbols.has(s.fyers_symbol)) return true;
         return false;
       });
     }
@@ -772,10 +779,15 @@ function App() {
                     onChange={() => setSelectedFundamentals(prev => prev.includes('high_growth') ? prev.filter(x => x !== 'high_growth') : [...prev, 'high_growth'])} />
                   🚀 High Growth (ROCE)
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', color: t.textMain }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', marginBottom: '8px', color: t.textMain }}>
                   <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedFundamentals.includes('moderate_growth')}
                     onChange={() => setSelectedFundamentals(prev => prev.includes('moderate_growth') ? prev.filter(x => x !== 'moderate_growth') : [...prev, 'moderate_growth'])} />
                   📈 Moderate Growth (ROCE)
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', color: t.textMain }}>
+                  <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedFundamentals.includes('high_dividend')}
+                    onChange={() => setSelectedFundamentals(prev => prev.includes('high_dividend') ? prev.filter(x => x !== 'high_dividend') : [...prev, 'high_dividend'])} />
+                  💰 High Dividend (Nifty50)
                 </label>
               </div>
 
