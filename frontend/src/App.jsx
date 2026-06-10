@@ -10,7 +10,6 @@ function App() {
   const [hierarchy, setHierarchy] = useState({});
   const [selectedMicros, setSelectedMicros] = useState(new Set());
   const [selectedFundamentals, setSelectedFundamentals] = useState([]);
-  const [dividendSymbols, setDividendSymbols] = useState(new Set());
   const [sidebarSearch, setSidebarSearch] = useState('');
   const [stocks, setStocks] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -60,10 +59,6 @@ function App() {
       .then(res => res.json())
       .then(res => setHierarchy(res.data || {}))
       .catch(err => { console.error("Filter Error:", err); setHierarchy({}); });
-    fetch('https://algo-scanner-lnck.onrender.com/api/dividend-symbols')
-      .then(res => res.json())
-      .then(res => setDividendSymbols(new Set(res.symbols || [])))
-      .catch(() => {});
   }, []);
 
   const doScan = (micros, fundamentals) => {
@@ -575,7 +570,7 @@ function App() {
     let items = stocks;
     // high_dividend restricts universe (AND), growth filters are OR with each other
     if (selectedFundamentals.includes('high_dividend')) {
-      items = items.filter(s => dividendSymbols.has(s.fyers_symbol));
+      items = items.filter(s => s.is_dividend_stock);
     }
     const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
     if (growthFilters.length > 0) {
@@ -590,7 +585,7 @@ function App() {
     return items.filter(stock =>
       Object.values(stock).some(val => String(val || '').toLowerCase().includes(lowerSearch))
     );
-  }, [stocks, searchTerm, selectedFundamentals, dividendSymbols]);
+  }, [stocks, searchTerm, selectedFundamentals]);
 
   const sortedStocks = useMemo(() => {
     let items = [...filteredStocks]; 
@@ -633,7 +628,7 @@ function App() {
     }
     // high_dividend restricts universe (AND), growth filters are OR with each other
     if (selectedFundamentals.includes('high_dividend')) {
-      items = items.filter(s => dividendSymbols.has(s.fyers_symbol));
+      items = items.filter(s => s.is_dividend_stock);
     }
     const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
     if (growthFilters.length > 0) {
@@ -678,7 +673,7 @@ function App() {
     }
     // high_dividend restricts universe (AND), growth filters are OR with each other
     if (selectedFundamentals.includes('high_dividend')) {
-      items = items.filter(s => dividendSymbols.has(s.fyers_symbol));
+      items = items.filter(s => s.is_dividend_stock);
     }
     const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
     if (growthFilters.length > 0) {

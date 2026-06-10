@@ -157,7 +157,8 @@ def run_first_daily_base_scan(lookback_days=30):
 
     for col, coltype in [('first_base_date', 'TEXT'), ('second_base_date', 'TEXT'),
                          ('is_high_roce', 'BOOLEAN DEFAULT FALSE'),
-                         ('is_moderate_growth', 'BOOLEAN DEFAULT FALSE')]:
+                         ('is_moderate_growth', 'BOOLEAN DEFAULT FALSE'),
+                         ('is_dividend_stock', 'BOOLEAN DEFAULT FALSE')]:
         cursor.execute(f"ALTER TABLE first_daily_base ADD COLUMN IF NOT EXISTS {col} {coltype}")
     conn.commit()
     for col in ('step1_date', 'step2_date', 'signal_date'):
@@ -177,7 +178,7 @@ def run_first_daily_base_scan(lookback_days=30):
 
     cursor.execute("""
         SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
-               is_high_roce, is_moderate_growth
+               is_high_roce, is_moderate_growth, is_dividend_stock
         FROM stocks
         WHERE fyers_symbol IS NOT NULL
     """)
@@ -187,7 +188,7 @@ def run_first_daily_base_scan(lookback_days=30):
     signals = []
     failed  = []
 
-    for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
+    for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth, is_dividend_stock in tqdm(stocks):
         try:
             df = load_ohlcv_from_db(conn, symbol)
             if df is None or len(df) < 210:
@@ -206,7 +207,7 @@ def run_first_daily_base_scan(lookback_days=30):
                 continue
 
             signals.append((symbol, stock_name, sector, industry, basic_industry, rs_score,
-                            first_base, second_base, is_high_roce, is_moderate_growth))
+                            first_base, second_base, is_high_roce, is_moderate_growth, is_dividend_stock))
             log_progress(cursor, conn,
                 f"🎯 {symbol} → 1st Base: {first_base} | 2nd Base: {second_base or '--'}")
 
@@ -234,9 +235,9 @@ def run_first_daily_base_scan(lookback_days=30):
         execute_values(cursor, """
             INSERT INTO first_daily_base
                 (fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
-                 first_base_date, second_base_date, is_high_roce, is_moderate_growth, updated_at)
+                 first_base_date, second_base_date, is_high_roce, is_moderate_growth, is_dividend_stock, updated_at)
             VALUES %s
-        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], datetime.now(IST)) for s in signals])
+        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10], datetime.now(IST)) for s in signals])
     conn.commit()
 
     log_progress(cursor, conn, f"✅ {len(signals)} signals | {len(failed)} failed | {len(stocks)} scanned")
@@ -313,9 +314,12 @@ def run_early_weekly_base_scan(lookback_days=30):
             pullback_date    TEXT,
             is_high_roce     BOOLEAN DEFAULT FALSE,
             is_moderate_growth BOOLEAN DEFAULT FALSE,
+            is_dividend_stock BOOLEAN DEFAULT FALSE,
             updated_at       TIMESTAMPTZ DEFAULT NOW()
         )
     """)
+    conn.commit()
+    cursor.execute("ALTER TABLE early_weekly_base ADD COLUMN IF NOT EXISTS is_dividend_stock BOOLEAN DEFAULT FALSE")
     conn.commit()
 
     log_progress(cursor, conn, f"🌿 Early Weekly Base Scan Started (lookback={lookback_days} days)", JOB)
@@ -331,7 +335,7 @@ def run_early_weekly_base_scan(lookback_days=30):
 
     cursor.execute("""
         SELECT fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
-               is_high_roce, is_moderate_growth
+               is_high_roce, is_moderate_growth, is_dividend_stock
         FROM stocks
         WHERE fyers_symbol IS NOT NULL
     """)
@@ -341,7 +345,7 @@ def run_early_weekly_base_scan(lookback_days=30):
     signals = []
     failed  = []
 
-    for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth in tqdm(stocks):
+    for symbol, stock_name, sector, industry, basic_industry, rs_score, is_high_roce, is_moderate_growth, is_dividend_stock in tqdm(stocks):
         try:
             df = load_ohlcv_from_db(conn, symbol)
             if df is None or len(df) < 210:
@@ -354,7 +358,7 @@ def run_early_weekly_base_scan(lookback_days=30):
                 continue
 
             signals.append((symbol, stock_name, sector, industry, basic_industry, rs_score,
-                            pullback_date, is_high_roce, is_moderate_growth))
+                            pullback_date, is_high_roce, is_moderate_growth, is_dividend_stock))
             log_progress(cursor, conn, f"🌿 {symbol} → Pullback: {pullback_date}", JOB)
 
         except Exception as e:
@@ -381,9 +385,9 @@ def run_early_weekly_base_scan(lookback_days=30):
         execute_values(cursor, """
             INSERT INTO early_weekly_base
                 (fyers_symbol, stock_name, sector, industry, basic_industry, rs_score,
-                 pullback_date, is_high_roce, is_moderate_growth, updated_at)
+                 pullback_date, is_high_roce, is_moderate_growth, is_dividend_stock, updated_at)
             VALUES %s
-        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], datetime.now(IST)) for s in signals])
+        """, [(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], datetime.now(IST)) for s in signals])
     conn.commit()
 
     log_progress(cursor, conn, f"✅ {len(signals)} signals | {len(failed)} no-data | {len(stocks)} scanned", JOB)

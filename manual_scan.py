@@ -119,20 +119,48 @@ def fetch_and_upsert_screener(conn, cursor, url, db_column, label):
         print(f"❌ Error during {label} Screener fetch/upsert: {e}")
         conn.rollback()
 
+def fetch_and_flag_dividend_stocks(conn, cursor):
+    """Downloads Nifty Dividend Opportunities 50 CSV and sets is_dividend_stock = True for matching stocks."""
+    print("\n💰 Fetching Nifty Dividend Opportunities 50 from NSE...")
+    url = "https://www.niftyindices.com/IndexConstituent/ind_niftydivopp50list.csv"
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        syms = []
+        for line in resp.text.splitlines()[1:]:
+            parts = line.split(",")
+            if len(parts) >= 3:
+                symbol = parts[2].strip()
+                if symbol and not symbol.startswith("Dummy"):
+                    syms.append(f"NSE:{symbol}-EQ")
+        if not syms:
+            print("⚠️ No dividend symbols parsed — skipping flag update.")
+            return
+        for symbol in syms:
+            cursor.execute("UPDATE stocks SET is_dividend_stock = True WHERE fyers_symbol = %s", (symbol,))
+        conn.commit()
+        print(f"✅ Dividend stock flags updated: {len(syms)} symbols from NSE.")
+    except Exception as e:
+        print(f"❌ Error fetching dividend list: {e}")
+        conn.rollback()
+
+
 # --- 🚀 MASTER FUNDAMENTAL RUNNER ---
 def run_all_fundamental_scrapes(conn, cursor):
     print("\n🧹 Phase 1: Resetting all fundamental flags in database to False...")
-    # Reset both columns before we start injecting the fresh daily data
-    cursor.execute("UPDATE stocks SET is_high_roce = False, is_moderate_growth = False")
+    cursor.execute("UPDATE stocks SET is_high_roce = False, is_moderate_growth = False, is_dividend_stock = False")
     conn.commit()
-    
+
     # 1. Scrape High Growth
     high_growth_url = "https://www.screener.in/screens/181364/winner-high-roce-high-growth/"
     fetch_and_upsert_screener(conn, cursor, high_growth_url, "is_high_roce", "High Growth")
-    
+
     # 2. Scrape Moderate Growth
     mod_growth_url = "https://www.screener.in/screens/181365/aspirer-high-roce-moderate-growth/"
     fetch_and_upsert_screener(conn, cursor, mod_growth_url, "is_moderate_growth", "Moderate Growth")
+
+    # 3. Fetch Nifty Dividend Opportunities 50
+    fetch_and_flag_dividend_stocks(conn, cursor)
 
 
 # --- 🚀 THE MAIN TECHNICAL SCAN ENGINE ---
@@ -167,10 +195,9 @@ def run_daily_scan():
 
     n_df = pd.DataFrame(n_res.get('candles', []), columns=['date','open','high','low','close','vol'])
 
-    # Ensure weekly_ema_bullish column exists
-    cursor.execute("""
-        ALTER TABLE stocks ADD COLUMN IF NOT EXISTS weekly_ema_bullish BOOLEAN DEFAULT FALSE
-    """)
+    # Ensure new columns exist
+    cursor.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS weekly_ema_bullish BOOLEAN DEFAULT FALSE")
+    cursor.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS is_dividend_stock BOOLEAN DEFAULT FALSE")
 
     # Shared OHLCV cache — populated here, consumed by base scan jobs later tonight
     cursor.execute("""

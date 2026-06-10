@@ -17,56 +17,6 @@ from pathlib import Path
 
 app = FastAPI(title="Algo Scanner Cloud API")
 
-# ── Nifty Dividend Opportunities 50 — cached in memory ───────────────────────
-_dividend_symbols: set = set()
-_dividend_cache_ts: float = 0
-_DIVIDEND_URL = "https://www.niftyindices.com/IndexConstituent/ind_niftydivopp50list.csv"
-_DIVIDEND_TTL = 86400  # refresh once per day
-
-# Hardcoded fallback — Nifty Dividend Opportunities 50 constituents (verified Jun 2025)
-_DIVIDEND_FALLBACK = {
-    "NSE:ANGELONE-EQ", "NSE:ASHOKLEY-EQ", "NSE:BAJAJ-AUTO-EQ", "NSE:BANKBARODA-EQ",
-    "NSE:BANKINDIA-EQ", "NSE:BPCL-EQ", "NSE:BRITANNIA-EQ", "NSE:CANBK-EQ",
-    "NSE:COALINDIA-EQ", "NSE:COLPAL-EQ", "NSE:CUMMINSIND-EQ", "NSE:GAIL-EQ",
-    "NSE:GODREJCP-EQ", "NSE:HCLTECH-EQ", "NSE:HDFCAMC-EQ", "NSE:HEROMOTOCO-EQ",
-    "NSE:HINDPETRO-EQ", "NSE:HINDUNILVR-EQ", "NSE:HINDZINC-EQ", "NSE:HUDCO-EQ",
-    "NSE:INDIANB-EQ", "NSE:INFY-EQ", "NSE:IOC-EQ", "NSE:IRFC-EQ",
-    "NSE:ITC-EQ", "NSE:M&MFIN-EQ", "NSE:MAHABANK-EQ", "NSE:MPHASIS-EQ",
-    "NSE:NATIONALUM-EQ", "NSE:NHPC-EQ", "NSE:NMDC-EQ", "NSE:NTPC-EQ",
-    "NSE:OFSS-EQ", "NSE:OIL-EQ", "NSE:ONGC-EQ", "NSE:PAGEIND-EQ",
-    "NSE:PFC-EQ", "NSE:PNB-EQ", "NSE:POWERGRID-EQ", "NSE:RECLTD-EQ",
-    "NSE:REDINGTON-EQ", "NSE:SAIL-EQ", "NSE:SBIN-EQ", "NSE:SHRIRAMFIN-EQ",
-    "NSE:TATASTEEL-EQ", "NSE:TCS-EQ", "NSE:TECHM-EQ", "NSE:UNIONBANK-EQ",
-    "NSE:VEDL-EQ", "NSE:WIPRO-EQ",
-}
-
-def _get_dividend_symbols() -> set:
-    global _dividend_symbols, _dividend_cache_ts
-    if _dividend_symbols and (time.time() - _dividend_cache_ts) < _DIVIDEND_TTL:
-        return _dividend_symbols
-    try:
-        resp = requests.get(_DIVIDEND_URL, timeout=10,
-                            headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
-        syms = set()
-        for line in resp.text.splitlines()[1:]:  # skip header
-            parts = line.split(",")
-            if len(parts) >= 3:
-                symbol = parts[2].strip()
-                if symbol and not symbol.startswith("Dummy"):
-                    syms.add(f"NSE:{symbol}-EQ")
-        if syms:
-            _dividend_symbols = syms
-            _dividend_cache_ts = time.time()
-            print(f"[dividend] fetched {len(syms)} symbols from URL", flush=True)
-            return _dividend_symbols
-    except Exception as e:
-        print(f"[dividend] fetch failed: {e} — using hardcoded fallback", flush=True)
-    # Return hardcoded fallback when URL is unreachable (e.g. Render server blocks niftyindices.com)
-    if not _dividend_symbols:
-        _dividend_symbols = _DIVIDEND_FALLBACK.copy()
-        _dividend_cache_ts = time.time()
-    return _dividend_symbols
 
 app.add_middleware(
     CORSMiddleware,
@@ -106,9 +56,14 @@ async def get_stocks_directory():
 
 @app.get("/api/dividend-symbols")
 async def get_dividend_symbols():
-    """Returns the Nifty Dividend Opportunities 50 fyers_symbol list for client-side filtering."""
-    syms = _get_dividend_symbols()
-    return {"status": "success", "symbols": sorted(syms)}
+    """Returns fyers_symbols flagged as is_dividend_stock = True in the DB."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fyers_symbol FROM stocks WHERE is_dividend_stock = TRUE AND fyers_symbol IS NOT NULL ORDER BY fyers_symbol")
+    syms = [r[0] for r in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    return {"status": "success", "symbols": syms}
 
 
 @app.get("/api/filters")
@@ -165,24 +120,17 @@ async def get_stocks(request: IndustryRequest):
         query_conditions.append(f"industry IN ({placeholders})")
         query_params.extend(request.industries)
 
-    # 2. Fundamental filters
+    # 2. Fundamental filters — all use DB columns, OR-ed together
     if request.fundamentals:
-        # high_dividend is an AND filter (universe restrictor) — applied separately
-        # high_growth / moderate_growth are OR-ed with each other
+        fund_conditions = []
         if "high_dividend" in request.fundamentals:
-            div_syms = _get_dividend_symbols()
-            if div_syms:
-                placeholders = ", ".join(["%s"] * len(div_syms))
-                query_conditions.append(f"fyers_symbol IN ({placeholders})")
-                query_params.extend(sorted(div_syms))
-
-        growth_conditions = []
+            fund_conditions.append("is_dividend_stock = True")
         if "high_growth" in request.fundamentals:
-            growth_conditions.append("is_high_roce = True")
+            fund_conditions.append("is_high_roce = True")
         if "moderate_growth" in request.fundamentals:
-            growth_conditions.append("is_moderate_growth = True")
-        if growth_conditions:
-            query_conditions.append("(" + " OR ".join(growth_conditions) + ")")
+            fund_conditions.append("is_moderate_growth = True")
+        if fund_conditions:
+            query_conditions.append("(" + " OR ".join(fund_conditions) + ")")
 
     # 3. Lookback filter: at least one intraday pullback must be within the window
     if request.lookback_days and request.lookback_days > 0:
@@ -196,7 +144,8 @@ async def get_stocks(request: IndustryRequest):
 
     cursor.execute(f"""
         SELECT stock_name, fyers_symbol, industry, basic_industry, daily_cross_date,
-               first_15m_cross_time, first_1h_cross_time, rs_score
+               first_15m_cross_time, first_1h_cross_time, rs_score,
+               is_high_roce, is_moderate_growth, is_dividend_stock
         FROM stocks
         WHERE {where_clause}
     """, tuple(query_params))
@@ -818,7 +767,7 @@ async def get_first_daily_base(lookback_days: int = 30, weekly_ema_filter: bool 
         cursor.execute(f"""
             SELECT f.fyers_symbol, f.stock_name, f.sector, f.industry, f.basic_industry,
                    f.rs_score, f.first_base_date, f.second_base_date,
-                   f.is_high_roce, f.is_moderate_growth
+                   f.is_high_roce, f.is_moderate_growth, f.is_dividend_stock
             FROM first_daily_base f
             {weekly_join}
             WHERE GREATEST(f.first_base_date, COALESCE(f.second_base_date, f.first_base_date)) >= %s
@@ -893,7 +842,7 @@ async def get_early_weekly_base(lookback_days: int = 30, weekly_ema_filter: bool
 
         cursor.execute(f"""
             SELECT e.fyers_symbol, e.stock_name, e.sector, e.industry, e.basic_industry,
-                   e.rs_score, e.pullback_date, e.is_high_roce, e.is_moderate_growth
+                   e.rs_score, e.pullback_date, e.is_high_roce, e.is_moderate_growth, e.is_dividend_stock
             FROM early_weekly_base e
             {weekly_join}
             WHERE e.pullback_date >= %s
