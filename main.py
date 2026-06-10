@@ -144,19 +144,22 @@ async def get_stocks(request: IndustryRequest):
 
     # 2. Fundamental filters
     if request.fundamentals:
-        fund_conditions = []
-        if "high_growth" in request.fundamentals:
-            fund_conditions.append("is_high_roce = True")
-        if "moderate_growth" in request.fundamentals:
-            fund_conditions.append("is_moderate_growth = True")
+        # high_dividend is an AND filter (universe restrictor) — applied separately
+        # high_growth / moderate_growth are OR-ed with each other
         if "high_dividend" in request.fundamentals:
             div_syms = _get_dividend_symbols()
             if div_syms:
                 placeholders = ", ".join(["%s"] * len(div_syms))
-                fund_conditions.append(f"fyers_symbol IN ({placeholders})")
+                query_conditions.append(f"fyers_symbol IN ({placeholders})")
                 query_params.extend(sorted(div_syms))
-        if fund_conditions:
-            query_conditions.append("(" + " OR ".join(fund_conditions) + ")")
+
+        growth_conditions = []
+        if "high_growth" in request.fundamentals:
+            growth_conditions.append("is_high_roce = True")
+        if "moderate_growth" in request.fundamentals:
+            growth_conditions.append("is_moderate_growth = True")
+        if growth_conditions:
+            query_conditions.append("(" + " OR ".join(growth_conditions) + ")")
 
     # 3. Lookback filter: at least one intraday pullback must be within the window
     if request.lookback_days and request.lookback_days > 0:

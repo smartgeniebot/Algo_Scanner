@@ -619,11 +619,15 @@ function App() {
     if (selectedMicros.size > 0) {
       items = items.filter(s => selectedMicros.has(s.basic_industry));
     }
-    if (selectedFundamentals.length > 0) {
+    // high_dividend restricts universe (AND), growth filters are OR with each other
+    if (selectedFundamentals.includes('high_dividend')) {
+      items = items.filter(s => dividendSymbols.has(s.fyers_symbol));
+    }
+    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
+    if (growthFilters.length > 0) {
       items = items.filter(s => {
-        if (selectedFundamentals.includes('high_growth') && s.is_high_roce) return true;
-        if (selectedFundamentals.includes('moderate_growth') && s.is_moderate_growth) return true;
-        if (selectedFundamentals.includes('high_dividend') && dividendSymbols.has(s.fyers_symbol)) return true;
+        if (growthFilters.includes('high_growth') && s.is_high_roce) return true;
+        if (growthFilters.includes('moderate_growth') && s.is_moderate_growth) return true;
         return false;
       });
     }
@@ -660,11 +664,15 @@ function App() {
     if (selectedMicros.size > 0) {
       items = items.filter(s => selectedMicros.has(s.basic_industry));
     }
-    if (selectedFundamentals.length > 0) {
+    // high_dividend restricts universe (AND), growth filters are OR with each other
+    if (selectedFundamentals.includes('high_dividend')) {
+      items = items.filter(s => dividendSymbols.has(s.fyers_symbol));
+    }
+    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
+    if (growthFilters.length > 0) {
       items = items.filter(s => {
-        if (selectedFundamentals.includes('high_growth') && s.is_high_roce) return true;
-        if (selectedFundamentals.includes('moderate_growth') && s.is_moderate_growth) return true;
-        if (selectedFundamentals.includes('high_dividend') && dividendSymbols.has(s.fyers_symbol)) return true;
+        if (growthFilters.includes('high_growth') && s.is_high_roce) return true;
+        if (growthFilters.includes('moderate_growth') && s.is_moderate_growth) return true;
         return false;
       });
     }
