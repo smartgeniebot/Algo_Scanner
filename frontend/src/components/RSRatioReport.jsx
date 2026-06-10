@@ -210,6 +210,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
   const [qFilter, setQFilter]           = useState('ALL');
   const [search, setSearch]             = useState('');
   const [showInfo, setShowInfo]         = useState(false);
+  const [selectedRows, setSelectedRows] = useState(new Set());
 
   const t = {
     bg:      isDark ? '#020617' : '#f1f5f9',
@@ -488,7 +489,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', backgroundColor: t.panel, borderRadius: 8, border: `1px solid ${t.border}`, padding: 3, gap: 2 }}>
           {Object.entries(tabConfig).map(([k, v]) => (
-            <button key={k} onClick={() => { setTab(k); setSearch(''); setSortKey('quadrant'); setSortDir('asc'); }}
+            <button key={k} onClick={() => { setTab(k); setSearch(''); setSortKey('quadrant'); setSortDir('asc'); setSelectedRows(new Set()); }}
               style={{ padding: '6px 14px', borderRadius: 6, border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer', backgroundColor: tab === k ? '#2563eb' : 'transparent', color: tab === k ? '#fff' : t.muted, transition: 'all 0.2s' }}>
               {v.label}
             </button>
@@ -506,11 +507,52 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
         </div>
       </div>
 
+      {/* Multi-select scan bar */}
+      {onScanNavigate && selectedRows.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', marginBottom: 10, backgroundColor: isDark ? '#1e3a5f' : '#dbeafe', border: `1px solid ${isDark ? '#2563eb' : '#93c5fd'}`, borderRadius: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
+            {selectedRows.size} {tabConfig[tab].label}{selectedRows.size > 1 ? 's' : ''} selected
+          </span>
+          <button
+            onClick={() => {
+              const names = Array.from(selectedRows);
+              if (tab === 'micro') onScanNavigate(names, 'micro');
+              else if (tab === 'industry') onScanNavigate(names, 'macro');
+              else {
+                // sector: expand to all their industries
+                const allIndustries = [];
+                displayed.filter(r => names.includes(r._name)).forEach(r => {
+                  if (r.industries) r.industries.forEach(i => allIndustries.push(i.industry));
+                });
+                onScanNavigate(allIndustries.length ? allIndustries : names, 'macro');
+              }
+            }}
+            style={{ padding: '6px 18px', borderRadius: 6, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+            Scan Selected ({selectedRows.size})
+          </button>
+          <button onClick={() => setSelectedRows(new Set())}
+            style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${isDark ? '#2563eb' : '#93c5fd'}`, backgroundColor: 'transparent', color: isDark ? '#93c5fd' : '#1d4ed8', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <div style={{ backgroundColor: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
+              {onScanNavigate && (
+                <th style={{ padding: '10px 10px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, width: 36 }}>
+                  <input type="checkbox"
+                    checked={displayed.length > 0 && displayed.every(r => selectedRows.has(r._name))}
+                    onChange={e => {
+                      if (e.target.checked) setSelectedRows(new Set(displayed.map(r => r._name)));
+                      else setSelectedRows(new Set());
+                    }}
+                    style={{ cursor: 'pointer', width: 14, height: 14 }} />
+                </th>
+              )}
               <TH label="Group"         k="_name"          align="center" />
               <TH label="Stocks"        k="total_stocks"   align="center" />
               <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap', textAlign: 'center' }}>RS Ratio ({DAYS}D)</th>
@@ -525,12 +567,13 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
           </thead>
           <tbody>
             {histLoading ? (
-              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
+              <tr><td colSpan={onScanNavigate ? 11 : 10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
             ) : displayed.length === 0 ? (
-              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
+              <tr><td colSpan={onScanNavigate ? 11 : 10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
             ) : displayed.map((row, idx) => {
               const m = row._metrics;
               const isLast = idx === displayed.length - 1;
+              const isSelected = selectedRows.has(row._name);
 
               const rsRatioStr  = m ? m.rsRatioCurrent.toFixed(2) : '—';
               const rsRatioClr  = !m ? t.muted : m.rsRatioCurrent >= 100 ? '#16a34a' : '#dc2626';
@@ -538,9 +581,24 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
               const pctClr      = !m ? t.muted : m.pctFromHigh >= -2 ? t.text : '#dc2626';
 
               return (
-                <tr key={idx} style={{ borderBottom: isLast ? 'none' : `1px solid ${t.border}`, transition: 'background-color 0.1s' }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                <tr key={idx} style={{ borderBottom: isLast ? 'none' : `1px solid ${t.border}`, transition: 'background-color 0.1s', backgroundColor: isSelected ? (isDark ? 'rgba(37,99,235,0.12)' : 'rgba(219,234,254,0.6)') : 'transparent' }}
+                  onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = t.hover; }}
+                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+
+                  {onScanNavigate && (
+                    <td style={{ padding: '11px 10px', textAlign: 'center', width: 36 }}>
+                      <input type="checkbox" checked={isSelected}
+                        onChange={() => {
+                          setSelectedRows(prev => {
+                            const next = new Set(prev);
+                            if (next.has(row._name)) next.delete(row._name);
+                            else next.add(row._name);
+                            return next;
+                          });
+                        }}
+                        style={{ cursor: 'pointer', width: 14, height: 14 }} />
+                    </td>
+                  )}
 
                   <td style={{ padding: '11px 14px', fontWeight: 700, fontSize: 13, maxWidth: 180, textAlign: 'center' }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row._name}>{row._name}</div>
@@ -591,10 +649,11 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                   </td>
 
                   <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-                    {onScanNavigate && tab !== 'micro' && (
+                    {onScanNavigate && (
                       <button
                         onClick={() => {
-                          if (tab === 'industry') onScanNavigate([row.industry], 'macro');
+                          if (tab === 'micro') onScanNavigate([row.basic_industry], 'micro');
+                          else if (tab === 'industry') onScanNavigate([row.industry], 'macro');
                           else if (tab === 'sector' && row.industries) onScanNavigate(row.industries.map(i => i.industry), 'macro');
                         }}
                         style={{ padding: '4px 12px', borderRadius: 5, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
