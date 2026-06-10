@@ -23,6 +23,23 @@ _dividend_cache_ts: float = 0
 _DIVIDEND_URL = "https://www.niftyindices.com/IndexConstituent/ind_niftydivopp50list.csv"
 _DIVIDEND_TTL = 86400  # refresh once per day
 
+# Hardcoded fallback — Nifty Dividend Opportunities 50 constituents (as of Jun 2025)
+_DIVIDEND_FALLBACK = {
+    "NSE:COALINDIA-EQ", "NSE:HINDPETRO-EQ", "NSE:BPCL-EQ", "NSE:IOC-EQ",
+    "NSE:ONGC-EQ", "NSE:POWERGRID-EQ", "NSE:NTPC-EQ", "NSE:GAIL-EQ",
+    "NSE:NMDC-EQ", "NSE:RECLTD-EQ", "NSE:PFC-EQ", "NSE:BANKBARODA-EQ",
+    "NSE:UNIONBANK-EQ", "NSE:CANBK-EQ", "NSE:IDFCFIRSTB-EQ", "NSE:SAIL-EQ",
+    "NSE:NATIONALUM-EQ", "NSE:MOIL-EQ", "NSE:MRPL-EQ", "NSE:CHENNPETRO-EQ",
+    "NSE:PETRONET-EQ", "NSE:HUDCO-EQ", "NSE:IRFC-EQ", "NSE:SJVN-EQ",
+    "NSE:NHPC-EQ", "NSE:NBCC-EQ", "NSE:BEL-EQ", "NSE:HAL-EQ",
+    "NSE:BHEL-EQ", "NSE:MTNL-EQ", "NSE:BSOFT-EQ", "NSE:VEDL-EQ",
+    "NSE:HINDZINC-EQ", "NSE:TECHM-EQ", "NSE:INFY-EQ", "NSE:WIPRO-EQ",
+    "NSE:HCL-EQ", "NSE:HCLTECH-EQ", "NSE:TCS-EQ", "NSE:BALKRISIND-EQ",
+    "NSE:CASTROLIND-EQ", "NSE:ISPATIND-EQ", "NSE:MARICO-EQ", "NSE:ITC-EQ",
+    "NSE:RADICO-EQ", "NSE:PGHH-EQ", "NSE:VSTTILLERS-EQ", "NSE:ZENSARTECH-EQ",
+    "NSE:ECLERX-EQ", "NSE:INDIGOPNTS-EQ",
+}
+
 def _get_dividend_symbols() -> set:
     global _dividend_symbols, _dividend_cache_ts
     if _dividend_symbols and (time.time() - _dividend_cache_ts) < _DIVIDEND_TTL:
@@ -41,8 +58,14 @@ def _get_dividend_symbols() -> set:
         if syms:
             _dividend_symbols = syms
             _dividend_cache_ts = time.time()
+            print(f"[dividend] fetched {len(syms)} symbols from URL", flush=True)
+            return _dividend_symbols
     except Exception as e:
-        print(f"[dividend] fetch failed: {e}", flush=True)
+        print(f"[dividend] fetch failed: {e} — using hardcoded fallback", flush=True)
+    # Return hardcoded fallback when URL is unreachable (e.g. Render server blocks niftyindices.com)
+    if not _dividend_symbols:
+        _dividend_symbols = _DIVIDEND_FALLBACK.copy()
+        _dividend_cache_ts = time.time()
     return _dividend_symbols
 
 app.add_middleware(

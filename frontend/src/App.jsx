@@ -572,13 +572,25 @@ function App() {
   };
 
   const filteredStocks = useMemo(() => {
-    if (!searchTerm) return stocks;
+    let items = stocks;
+    // high_dividend restricts universe (AND), growth filters are OR with each other
+    if (selectedFundamentals.includes('high_dividend')) {
+      items = items.filter(s => dividendSymbols.has(s.fyers_symbol));
+    }
+    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
+    if (growthFilters.length > 0) {
+      items = items.filter(s => {
+        if (growthFilters.includes('high_growth') && s.is_high_roce) return true;
+        if (growthFilters.includes('moderate_growth') && s.is_moderate_growth) return true;
+        return false;
+      });
+    }
+    if (!searchTerm) return items;
     const lowerSearch = searchTerm.toLowerCase();
-    return stocks.filter(stock =>
-      // 🛡️ HIDDEN BUG FIX: Added || '' to prevent silent crashes if a database column is NULL
+    return items.filter(stock =>
       Object.values(stock).some(val => String(val || '').toLowerCase().includes(lowerSearch))
     );
-  }, [stocks, searchTerm]);
+  }, [stocks, searchTerm, selectedFundamentals, dividendSymbols]);
 
   const sortedStocks = useMemo(() => {
     let items = [...filteredStocks]; 
