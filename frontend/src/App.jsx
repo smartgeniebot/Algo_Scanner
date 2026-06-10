@@ -539,17 +539,22 @@ function App() {
     if (activeTabStocks.length === 0) return;
     const symbols = activeTabStocks.map(s => s.fyers_symbol).filter(Boolean);
     if (symbols.length === 0) return;
-    const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const today = new Date().toLocaleDateString('en-CA');
     const time  = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }).replace(':', '');
     const label = scannerSubTab === 'early' ? 'EarlyBases' : scannerSubTab === 'weekly' ? 'WeeklyBases' : 'Scan';
-    const filename = `${today}_${label}_${time}.txt`;
-    const blob = new Blob([symbols.join(',')], { type: 'text/plain;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const chunks = [];
+    for (let i = 0; i < symbols.length; i += 250) chunks.push(symbols.slice(i, i + 250));
+    chunks.forEach((chunk, idx) => {
+      const suffix = chunks.length > 1 ? `_P${idx + 1}` : '';
+      const filename = `${today}_${label}${suffix}_${time}.txt`;
+      const blob = new Blob([chunk.join(',')], { type: 'text/plain;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
   };
 
   const formatDT = (dt) => {
