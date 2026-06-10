@@ -145,10 +145,45 @@ def fetch_and_flag_dividend_stocks(conn, cursor):
         conn.rollback()
 
 
+def fetch_and_flag_fno_stocks(conn, cursor):
+    """Downloads NSE F&O securities list and sets is_fno_stock = True for matching stocks."""
+    print("\n📊 Fetching F&O securities list from NSE...")
+    url = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://www.nseindia.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        session = requests.Session()
+        # Prime the session cookie NSE requires
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        resp = session.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        syms = []
+        for line in resp.text.splitlines()[1:]:
+            parts = line.split(",")
+            if parts:
+                symbol = parts[0].strip()
+                if symbol and symbol not in ("SYMBOL", ""):
+                    syms.append(f"NSE:{symbol}-EQ")
+        if not syms:
+            print("⚠️ No F&O symbols parsed — skipping flag update.")
+            return
+        for symbol in syms:
+            cursor.execute("UPDATE stocks SET is_fno_stock = True WHERE fyers_symbol = %s", (symbol,))
+        conn.commit()
+        print(f"✅ F&O stock flags updated: {len(syms)} symbols from NSE.")
+    except Exception as e:
+        print(f"❌ Error fetching F&O list: {e}")
+        conn.rollback()
+
+
 # --- 🚀 MASTER FUNDAMENTAL RUNNER ---
 def run_all_fundamental_scrapes(conn, cursor):
     print("\n🧹 Phase 1: Resetting all fundamental flags in database to False...")
-    cursor.execute("UPDATE stocks SET is_high_roce = False, is_moderate_growth = False, is_dividend_stock = False")
+    cursor.execute("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS is_fno_stock BOOLEAN DEFAULT FALSE")
+    cursor.execute("UPDATE stocks SET is_high_roce = False, is_moderate_growth = False, is_dividend_stock = False, is_fno_stock = False")
     conn.commit()
 
     # 1. Scrape High Growth
@@ -161,6 +196,9 @@ def run_all_fundamental_scrapes(conn, cursor):
 
     # 3. Fetch Nifty Dividend Opportunities 50
     fetch_and_flag_dividend_stocks(conn, cursor)
+
+    # 4. Fetch NSE F&O securities list
+    fetch_and_flag_fno_stocks(conn, cursor)
 
 
 # --- 🚀 THE MAIN TECHNICAL SCAN ENGINE ---

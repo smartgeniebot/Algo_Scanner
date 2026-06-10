@@ -566,11 +566,11 @@ function App() {
 
   const filteredStocks = useMemo(() => {
     let items = stocks;
-    // high_dividend restricts universe (AND), growth filters are OR with each other
-    if (selectedFundamentals.includes('high_dividend')) {
-      items = items.filter(s => s.is_dividend_stock);
-    }
-    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
+    // AND filters: restrict universe regardless of other selections
+    if (selectedFundamentals.includes('high_dividend')) items = items.filter(s => s.is_dividend_stock);
+    if (selectedFundamentals.includes('fno')) items = items.filter(s => s.is_fno_stock);
+    // OR filters: growth flags are OR-ed together
+    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend' && f !== 'fno');
     if (growthFilters.length > 0) {
       items = items.filter(s => {
         if (growthFilters.includes('high_growth') && s.is_high_roce) return true;
@@ -624,11 +624,9 @@ function App() {
     if (selectedMicros.size > 0) {
       items = items.filter(s => selectedMicros.has(s.basic_industry));
     }
-    // high_dividend restricts universe (AND), growth filters are OR with each other
-    if (selectedFundamentals.includes('high_dividend')) {
-      items = items.filter(s => s.is_dividend_stock);
-    }
-    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
+    if (selectedFundamentals.includes('high_dividend')) items = items.filter(s => s.is_dividend_stock);
+    if (selectedFundamentals.includes('fno')) items = items.filter(s => s.is_fno_stock);
+    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend' && f !== 'fno');
     if (growthFilters.length > 0) {
       items = items.filter(s => {
         if (growthFilters.includes('high_growth') && s.is_high_roce) return true;
@@ -669,11 +667,9 @@ function App() {
     if (selectedMicros.size > 0) {
       items = items.filter(s => selectedMicros.has(s.basic_industry));
     }
-    // high_dividend restricts universe (AND), growth filters are OR with each other
-    if (selectedFundamentals.includes('high_dividend')) {
-      items = items.filter(s => s.is_dividend_stock);
-    }
-    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend');
+    if (selectedFundamentals.includes('high_dividend')) items = items.filter(s => s.is_dividend_stock);
+    if (selectedFundamentals.includes('fno')) items = items.filter(s => s.is_fno_stock);
+    const growthFilters = selectedFundamentals.filter(f => f !== 'high_dividend' && f !== 'fno');
     if (growthFilters.length > 0) {
       items = items.filter(s => {
         if (growthFilters.includes('high_growth') && s.is_high_roce) return true;
@@ -793,10 +789,15 @@ function App() {
                     onChange={() => setSelectedFundamentals(prev => prev.includes('moderate_growth') ? prev.filter(x => x !== 'moderate_growth') : [...prev, 'moderate_growth'])} />
                   📈 Moderate Growth (ROCE)
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', color: t.textMain }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', marginBottom: '8px', color: t.textMain }}>
                   <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedFundamentals.includes('high_dividend')}
                     onChange={() => setSelectedFundamentals(prev => prev.includes('high_dividend') ? prev.filter(x => x !== 'high_dividend') : [...prev, 'high_dividend'])} />
                   💰 High Dividend Stocks
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', color: t.textMain }}>
+                  <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedFundamentals.includes('fno')}
+                    onChange={() => setSelectedFundamentals(prev => prev.includes('fno') ? prev.filter(x => x !== 'fno') : [...prev, 'fno'])} />
+                  🎯 F&amp;O Stocks
                 </label>
               </div>
 
@@ -909,8 +910,11 @@ function App() {
                               onMouseEnter={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = t.hover }}
                               onMouseLeave={(e) => { if(!isRowActive) e.currentTarget.style.backgroundColor = 'transparent' }}
                             >
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
                                 <div style={{fontWeight:'800', color: isRowActive ? '#3b82f6' : t.textTicker}}>{cleanTicker || '--'}</div>
+                                {s.is_fno_stock && <span style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', backgroundColor: theme === 'dark' ? 'rgba(124,58,237,0.18)' : '#ede9fe', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>F&O</span>}
+                                {s.is_dividend_stock && <span style={{ fontSize: '9px', fontWeight: '800', color: '#b45309', backgroundColor: theme === 'dark' ? 'rgba(180,83,9,0.18)' : '#fef3c7', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>DIV</span>}
+                                {s.is_high_roce && <span style={{ fontSize: '9px', fontWeight: '800', color: '#15803d', backgroundColor: theme === 'dark' ? 'rgba(21,128,61,0.18)' : '#dcfce7', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>ROCE</span>}
                               </div>
                               <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '4px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? "--"}</div>
                               <div style={{ color: t.textTicker, fontWeight: '700' }}>{formatDT(s.daily_cross_date)}</div>
@@ -962,7 +966,12 @@ function App() {
                           onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
                           onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <div style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</span>
+                            {s.is_fno_stock && <span style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', backgroundColor: theme === 'dark' ? 'rgba(124,58,237,0.18)' : '#ede9fe', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>F&O</span>}
+                            {s.is_dividend_stock && <span style={{ fontSize: '9px', fontWeight: '800', color: '#b45309', backgroundColor: theme === 'dark' ? 'rgba(180,83,9,0.18)' : '#fef3c7', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>DIV</span>}
+                            {s.is_high_roce && <span style={{ fontSize: '9px', fontWeight: '800', color: '#15803d', backgroundColor: theme === 'dark' ? 'rgba(21,128,61,0.18)' : '#dcfce7', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>ROCE</span>}
+                          </div>
                           <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '3px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? '--'}</div>
                           <div style={{ fontWeight: '700', color: '#f59e0b' }}>{formatDT(s.pullback_date)}</div>
                           <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 10px', textAlign: 'center' }}>
@@ -1001,7 +1010,12 @@ function App() {
                           onMouseEnter={e => e.currentTarget.style.backgroundColor = t.hover}
                           onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <div style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: '800', color: t.textTicker }}>{cleanTicker || '--'}</span>
+                            {s.is_fno_stock && <span style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', backgroundColor: theme === 'dark' ? 'rgba(124,58,237,0.18)' : '#ede9fe', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>F&O</span>}
+                            {s.is_dividend_stock && <span style={{ fontSize: '9px', fontWeight: '800', color: '#b45309', backgroundColor: theme === 'dark' ? 'rgba(180,83,9,0.18)' : '#fef3c7', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>DIV</span>}
+                            {s.is_high_roce && <span style={{ fontSize: '9px', fontWeight: '800', color: '#15803d', backgroundColor: theme === 'dark' ? 'rgba(21,128,61,0.18)' : '#dcfce7', padding: '1px 5px', borderRadius: '3px', letterSpacing: '0.3px' }}>ROCE</span>}
+                          </div>
                           <div style={{ fontWeight: '800', color: s.rs_score > 0 ? t.rsPosText : t.rsNegText, backgroundColor: s.rs_score > 0 ? t.rsPosBg : t.rsNegBg, padding: '3px 8px', borderRadius: '4px', display: 'inline-block', margin: '0 auto' }}>{s.rs_score ?? '--'}</div>
                           <div style={{ fontWeight: '700', color: '#10b981' }}>{formatDT(s.first_base_date)}</div>
                           <div style={{ fontWeight: has2nd ? '800' : '400', color: has2nd ? '#f59e0b' : t.textMuted }}>{has2nd ? formatDT(s.second_base_date) : '--'}</div>

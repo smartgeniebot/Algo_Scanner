@@ -129,6 +129,8 @@ async def get_stocks(request: IndustryRequest):
             fund_conditions.append("is_high_roce = True")
         if "moderate_growth" in request.fundamentals:
             fund_conditions.append("is_moderate_growth = True")
+        if "fno" in request.fundamentals:
+            fund_conditions.append("is_fno_stock = True")
         if fund_conditions:
             query_conditions.append("(" + " OR ".join(fund_conditions) + ")")
 
@@ -145,7 +147,7 @@ async def get_stocks(request: IndustryRequest):
     cursor.execute(f"""
         SELECT stock_name, fyers_symbol, industry, basic_industry, daily_cross_date,
                first_15m_cross_time, first_1h_cross_time, rs_score,
-               is_high_roce, is_moderate_growth, is_dividend_stock
+               is_high_roce, is_moderate_growth, is_dividend_stock, is_fno_stock
         FROM stocks
         WHERE {where_clause}
     """, tuple(query_params))
