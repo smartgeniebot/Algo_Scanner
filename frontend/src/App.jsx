@@ -774,7 +774,7 @@ function App() {
                 disabled={isScanDisabled}
                 style={{ width: '100%', padding: '12px', backgroundColor: isScanDisabled ? t.border : t.btnPrimaryBg, color: isScanDisabled ? t.textMuted : t.btnPrimaryText, border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '14px', cursor: isScanDisabled ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}
               >
-                {isScanDisabled ? "Select Filters to Scan" : "Scan Active Crosses"}
+                {isScanDisabled ? "Select Filters to Scan" : "Scan Basing Stocks"}
               </button>
             </div>
             
@@ -798,8 +798,6 @@ function App() {
                     onChange={() => {
                       const isAdding = !selectedFundamentals.includes('high_dividend');
                       if (isAdding) {
-                        // Clear all sector selections — high dividend is a standalone universe
-                        setSelectedMicros(new Set());
                         setSelectedFundamentals(prev => [...prev.filter(x => x !== 'high_dividend'), 'high_dividend']);
                       } else {
                         setSelectedFundamentals(prev => prev.filter(x => x !== 'high_dividend'));
