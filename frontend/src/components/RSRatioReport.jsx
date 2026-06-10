@@ -507,44 +507,24 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
         </div>
       </div>
 
-      {/* Multi-select scan bar */}
-      {onScanNavigate && selectedRows.size > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', marginBottom: 10, backgroundColor: isDark ? '#1e3a5f' : '#dbeafe', border: `1px solid ${isDark ? '#2563eb' : '#93c5fd'}`, borderRadius: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
-            {selectedRows.size} {tabConfig[tab].label}{selectedRows.size > 1 ? 's' : ''} selected
-          </span>
-          <button
-            onClick={() => {
-              const names = Array.from(selectedRows);
-              if (tab === 'micro') onScanNavigate(names, 'micro');
-              else if (tab === 'industry') onScanNavigate(names, 'macro');
-              else {
-                // sector: expand to all their industries
-                const allIndustries = [];
-                displayed.filter(r => names.includes(r._name)).forEach(r => {
-                  if (r.industries) r.industries.forEach(i => allIndustries.push(i.industry));
-                });
-                onScanNavigate(allIndustries.length ? allIndustries : names, 'macro');
-              }
-            }}
-            style={{ padding: '6px 18px', borderRadius: 6, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
-            Scan Selected ({selectedRows.size})
-          </button>
-          <button onClick={() => setSelectedRows(new Set())}
-            style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${isDark ? '#2563eb' : '#93c5fd'}`, backgroundColor: 'transparent', color: isDark ? '#93c5fd' : '#1d4ed8', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-            Clear
-          </button>
-        </div>
-      )}
-
       {/* Table */}
-      <div style={{ backgroundColor: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ backgroundColor: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, overflow: 'hidden', marginBottom: selectedRows.size > 0 ? 80 : 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
+              <TH label="Group"         k="_name"          align="center" />
+              <TH label="Stocks"        k="total_stocks"   align="center" />
+              <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap', textAlign: 'center' }}>RS Ratio ({DAYS}D)</th>
+              <TH label="vs Nifty 500 (63D)"   k="vsNifty500"   align="center" />
+              <TH label="Abs Return (63D)"      k="absReturn63d" align="center" />
+              <TH label="RS Ratio"              k="rsRatioCurrent" align="center" />
+              <TH label="RS Momentum (10D)"     k="rsMomentum"     align="center" />
+              <TH label="Quadrant"              k="quadrant"       align="center" />
+              <TH label="% from High"           k="pctFromHigh"    align="center" />
               {onScanNavigate && (
-                <th style={{ padding: '10px 10px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, width: 36 }}>
+                <th style={{ padding: '10px 10px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, width: 46, textAlign: 'center' }}>
                   <input type="checkbox"
+                    title="Select all"
                     checked={displayed.length > 0 && displayed.every(r => selectedRows.has(r._name))}
                     onChange={e => {
                       if (e.target.checked) setSelectedRows(new Set(displayed.map(r => r._name)));
@@ -553,23 +533,13 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                     style={{ cursor: 'pointer', width: 14, height: 14 }} />
                 </th>
               )}
-              <TH label="Group"         k="_name"          align="center" />
-              <TH label="Stocks"        k="total_stocks"   align="center" />
-              <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, whiteSpace: 'nowrap', textAlign: 'center' }}>RS Ratio ({DAYS}D)</th>
-              <TH label="vs Nifty 500 (63D)"   k="vsNifty500"   align="center" />
-              <TH label="Abs Return (63D)"      k="absReturn63d" align="center" />
-              <TH label="RS Ratio"           k="rsRatioCurrent" align="center" />
-              <TH label="RS Momentum (10D)" k="rsMomentum"     align="center" />
-              <TH label="Quadrant"      k="quadrant"       align="center" />
-              <TH label="% from High"   k="pctFromHigh"    align="center" />
-              <th style={{ padding: '10px 14px', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, textAlign: 'center', whiteSpace: 'nowrap' }}>Action</th>
             </tr>
           </thead>
           <tbody>
             {histLoading ? (
-              <tr><td colSpan={onScanNavigate ? 11 : 10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
+              <tr><td colSpan={onScanNavigate ? 10 : 9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>Loading RS Ratio data...</td></tr>
             ) : displayed.length === 0 ? (
-              <tr><td colSpan={onScanNavigate ? 11 : 10} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
+              <tr><td colSpan={onScanNavigate ? 10 : 9} style={{ padding: 40, textAlign: 'center', color: t.muted, fontWeight: 600 }}>No data matches the current filter.</td></tr>
             ) : displayed.map((row, idx) => {
               const m = row._metrics;
               const isLast = idx === displayed.length - 1;
@@ -584,21 +554,6 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                 <tr key={idx} style={{ borderBottom: isLast ? 'none' : `1px solid ${t.border}`, transition: 'background-color 0.1s', backgroundColor: isSelected ? (isDark ? 'rgba(37,99,235,0.12)' : 'rgba(219,234,254,0.6)') : 'transparent' }}
                   onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = t.hover; }}
                   onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}>
-
-                  {onScanNavigate && (
-                    <td style={{ padding: '11px 10px', textAlign: 'center', width: 36 }}>
-                      <input type="checkbox" checked={isSelected}
-                        onChange={() => {
-                          setSelectedRows(prev => {
-                            const next = new Set(prev);
-                            if (next.has(row._name)) next.delete(row._name);
-                            else next.add(row._name);
-                            return next;
-                          });
-                        }}
-                        style={{ cursor: 'pointer', width: 14, height: 14 }} />
-                    </td>
-                  )}
 
                   <td style={{ padding: '11px 14px', fontWeight: 700, fontSize: 13, maxWidth: 180, textAlign: 'center' }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row._name}>{row._name}</div>
@@ -648,19 +603,20 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                     <span style={{ fontSize: 13, fontWeight: 700, color: pctClr }}>{pctStr}</span>
                   </td>
 
-                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-                    {onScanNavigate && (
-                      <button
-                        onClick={() => {
-                          if (tab === 'micro') onScanNavigate([row.basic_industry], 'micro');
-                          else if (tab === 'industry') onScanNavigate([row.industry], 'macro');
-                          else if (tab === 'sector' && row.industries) onScanNavigate(row.industries.map(i => i.industry), 'macro');
+                  {onScanNavigate && (
+                    <td style={{ padding: '11px 10px', textAlign: 'center', width: 46 }}>
+                      <input type="checkbox" checked={isSelected}
+                        onChange={() => {
+                          setSelectedRows(prev => {
+                            const next = new Set(prev);
+                            if (next.has(row._name)) next.delete(row._name);
+                            else next.add(row._name);
+                            return next;
+                          });
                         }}
-                        style={{ padding: '4px 12px', borderRadius: 5, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
-                        Scan
-                      </button>
-                    )}
-                  </td>
+                        style={{ cursor: 'pointer', width: 14, height: 14 }} />
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -671,6 +627,44 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       <div style={{ marginTop: 10, fontSize: 11, color: t.muted, textAlign: 'right' }}>
         JdK RRG formula · RS Ratio = Z-score(SMA14) · RS Momentum = Z-score(ROC10, SMA14) · Updated daily after market close
       </div>
+
+      {/* Sticky scan bar — fixed to viewport bottom, appears only when rows are selected */}
+      {onScanNavigate && selectedRows.size > 0 && (
+        <div style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
+          padding: '14px 24px',
+          backgroundColor: isDark ? '#0f172a' : '#ffffff',
+          borderTop: `2px solid ${isDark ? '#2563eb' : '#93c5fd'}`,
+          boxShadow: '0 -4px 24px rgba(0,0,0,0.18)',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
+            {selectedRows.size} {tabConfig[tab].label}{selectedRows.size > 1 ? 's' : ''} selected
+          </span>
+          <button
+            onClick={() => {
+              const names = Array.from(selectedRows);
+              if (tab === 'micro') {
+                onScanNavigate(names, 'micro');
+              } else if (tab === 'industry') {
+                onScanNavigate(names, 'macro');
+              } else {
+                const allIndustries = [];
+                displayed.filter(r => names.includes(r._name)).forEach(r => {
+                  if (r.industries) r.industries.forEach(i => allIndustries.push(i.industry));
+                });
+                onScanNavigate(allIndustries.length ? allIndustries : names, 'macro');
+              }
+            }}
+            style={{ padding: '9px 28px', borderRadius: 7, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 800, cursor: 'pointer', letterSpacing: '0.2px' }}>
+            Scan {selectedRows.size} {tabConfig[tab].label}{selectedRows.size > 1 ? 's' : ''}
+          </button>
+          <button onClick={() => setSelectedRows(new Set())}
+            style={{ padding: '9px 16px', borderRadius: 7, border: `1.5px solid ${isDark ? '#334155' : '#cbd5e1'}`, backgroundColor: 'transparent', color: isDark ? '#94a3b8' : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            Clear
+          </button>
+        </div>
+      )}
     </div>
   );
 }
