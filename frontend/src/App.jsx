@@ -787,7 +787,7 @@ function App() {
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', color: t.textMain }}>
                   <input type="checkbox" style={{ accentColor: t.btnPrimaryBg }} checked={selectedFundamentals.includes('high_dividend')}
                     onChange={() => setSelectedFundamentals(prev => prev.includes('high_dividend') ? prev.filter(x => x !== 'high_dividend') : [...prev, 'high_dividend'])} />
-                  💰 High Dividend (Nifty50)
+                  💰 High Dividend Stocks
                 </label>
               </div>
 
