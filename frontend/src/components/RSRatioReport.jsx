@@ -522,15 +522,18 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
               <TH label="Quadrant"              k="quadrant"       align="center" />
               <TH label="% from High"           k="pctFromHigh"    align="center" />
               {onScanNavigate && (
-                <th style={{ padding: '10px 10px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, width: 46, textAlign: 'center' }}>
-                  <input type="checkbox"
-                    title="Select all"
-                    checked={displayed.length > 0 && displayed.every(r => selectedRows.has(r._name))}
-                    onChange={e => {
-                      if (e.target.checked) setSelectedRows(new Set(displayed.map(r => r._name)));
-                      else setSelectedRows(new Set());
-                    }}
-                    style={{ cursor: 'pointer', width: 14, height: 14 }} />
+                <th style={{ padding: '10px 10px', backgroundColor: t.header, borderBottom: `2px solid ${t.border}`, width: 46, textAlign: 'center', fontSize: 11, fontWeight: 800, color: t.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                    <span>Scan</span>
+                    <input type="checkbox"
+                      title="Select all"
+                      checked={displayed.length > 0 && displayed.every(r => selectedRows.has(r._name))}
+                      onChange={e => {
+                        if (e.target.checked) setSelectedRows(new Set(displayed.map(r => r._name)));
+                        else setSelectedRows(new Set());
+                      }}
+                      style={{ cursor: 'pointer', width: 14, height: 14 }} />
+                  </div>
                 </th>
               )}
             </tr>
@@ -632,37 +635,63 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
       {onScanNavigate && selectedRows.size > 0 && (
         <div style={{
           position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
-          padding: '14px 24px',
+          display: 'flex', alignItems: 'center', gap: 16,
+          padding: '12px 24px',
           backgroundColor: isDark ? '#0f172a' : '#ffffff',
           borderTop: `2px solid ${isDark ? '#2563eb' : '#93c5fd'}`,
           boxShadow: '0 -4px 24px rgba(0,0,0,0.18)',
         }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
-            {selectedRows.size} {tabConfig[tab].label}{selectedRows.size > 1 ? 's' : ''} selected
-          </span>
-          <button
-            onClick={() => {
-              const names = Array.from(selectedRows);
-              if (tab === 'micro') {
-                onScanNavigate(names, 'micro');
-              } else if (tab === 'industry') {
-                onScanNavigate(names, 'macro');
-              } else {
-                const allIndustries = [];
-                displayed.filter(r => names.includes(r._name)).forEach(r => {
-                  if (r.industries) r.industries.forEach(i => allIndustries.push(i.industry));
-                });
-                onScanNavigate(allIndustries.length ? allIndustries : names, 'macro');
-              }
-            }}
-            style={{ padding: '9px 28px', borderRadius: 7, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 800, cursor: 'pointer', letterSpacing: '0.2px' }}>
-            Scan {selectedRows.size} {tabConfig[tab].label}{selectedRows.size > 1 ? 's' : ''}
-          </button>
-          <button onClick={() => setSelectedRows(new Set())}
-            style={{ padding: '9px 16px', borderRadius: 7, border: `1.5px solid ${isDark ? '#334155' : '#cbd5e1'}`, backgroundColor: 'transparent', color: isDark ? '#94a3b8' : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-            Clear
-          </button>
+          {/* Count + action buttons */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8', whiteSpace: 'nowrap' }}>
+              {selectedRows.size} selected
+            </span>
+            <button
+              onClick={() => {
+                const names = Array.from(selectedRows);
+                if (tab === 'micro') {
+                  onScanNavigate(names, 'micro');
+                } else if (tab === 'industry') {
+                  onScanNavigate(names, 'macro');
+                } else {
+                  const allIndustries = [];
+                  displayed.filter(r => names.includes(r._name)).forEach(r => {
+                    if (r.industries) r.industries.forEach(i => allIndustries.push(i.industry));
+                  });
+                  onScanNavigate(allIndustries.length ? allIndustries : names, 'macro');
+                }
+              }}
+              style={{ padding: '7px 22px', borderRadius: 7, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              Scan
+            </button>
+            <button onClick={() => setSelectedRows(new Set())}
+              style={{ padding: '7px 14px', borderRadius: 7, border: `1.5px solid ${isDark ? '#334155' : '#cbd5e1'}`, backgroundColor: 'transparent', color: isDark ? '#94a3b8' : '#64748b', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              Clear
+            </button>
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: 1, height: 32, backgroundColor: isDark ? '#1e293b' : '#e2e8f0', flexShrink: 0 }} />
+
+          {/* Selected name pills — scrollable */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', overflow: 'hidden', maxHeight: 60 }}>
+            {Array.from(selectedRows).map(name => (
+              <span key={name} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '3px 10px', borderRadius: 20,
+                backgroundColor: isDark ? 'rgba(37,99,235,0.18)' : '#dbeafe',
+                border: `1px solid ${isDark ? '#2563eb' : '#93c5fd'}`,
+                fontSize: 11, fontWeight: 600, color: isDark ? '#93c5fd' : '#1d4ed8',
+                whiteSpace: 'nowrap',
+              }}>
+                {name}
+                <button onClick={() => setSelectedRows(prev => { const n = new Set(prev); n.delete(name); return n; })}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1, color: isDark ? '#64748b' : '#94a3b8', fontSize: 13, fontWeight: 700 }}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
         </div>
       )}
     </div>
