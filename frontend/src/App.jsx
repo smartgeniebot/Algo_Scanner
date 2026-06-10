@@ -770,18 +770,14 @@ function App() {
       {activeView === 'scanner' ? (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
           <div style={{ width: '340px', minWidth: '340px', backgroundColor: t.bgPanel, borderRight: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '20px 15px', display: 'flex', flexDirection: 'column', gap: '12px', borderBottom: `1px solid ${t.border}` }}>
-              <button 
-                onClick={handleScan} 
+            <div style={{ padding: '20px 15px', borderBottom: `1px solid ${t.border}` }}>
+              <button
+                onClick={handleScan}
                 disabled={isScanDisabled}
-                style={{ padding: '12px', backgroundColor: isScanDisabled ? t.border : t.btnPrimaryBg, color: isScanDisabled ? t.textMuted : t.btnPrimaryText, border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '14px', cursor: isScanDisabled ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}
+                style={{ width: '100%', padding: '12px', backgroundColor: isScanDisabled ? t.border : t.btnPrimaryBg, color: isScanDisabled ? t.textMuted : t.btnPrimaryText, border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '14px', cursor: isScanDisabled ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}
               >
                 {isScanDisabled ? "Select Filters to Scan" : "Scan Active Crosses"}
               </button>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button onClick={handleSelectAll} style={{ padding: '10px', backgroundColor: t.btnSuccessBg, color: t.btnSuccessText, border: `1px solid ${t.btnSuccessBorder}`, borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', flex: 1 }}>Select All</button>
-                <button onClick={handleClear} style={{ padding: '10px', backgroundColor: t.btnDangerBg, color: t.btnDangerText, border: `1px solid ${t.btnDangerBorder}`, borderRadius: '6px', fontWeight: '600', fontSize: '13px', cursor: 'pointer', flex: 1 }}>Clear All</button>
-              </div>
             </div>
             
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -821,9 +817,14 @@ function App() {
                   <div style={{ fontWeight: '800', fontSize: '11px', color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                     Sector / Industry
                   </div>
-                  {selectedMicros.size > 0 && (
-                    <span style={{ fontSize: '11px', fontWeight: '700', color: '#3b82f6' }}>{selectedMicros.size} selected</span>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {selectedMicros.size > 0 && (
+                      <span style={{ fontSize: '11px', fontWeight: '700', color: '#3b82f6' }}>{selectedMicros.size} selected ·</span>
+                    )}
+                    <button onClick={handleSelectAll} style={{ background: 'none', border: 'none', padding: 0, fontSize: '11px', fontWeight: '600', color: t.btnPrimaryBg, cursor: 'pointer', textDecoration: 'underline' }}>All</button>
+                    <span style={{ fontSize: '11px', color: t.textMuted }}>·</span>
+                    <button onClick={handleClear} style={{ background: 'none', border: 'none', padding: 0, fontSize: '11px', fontWeight: '600', color: t.textMuted, cursor: 'pointer', textDecoration: 'underline' }}>Clear</button>
+                  </div>
                 </div>
                 <input
                   id="sidebar-search"
