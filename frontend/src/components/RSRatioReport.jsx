@@ -436,7 +436,7 @@ export default function RSRatioReport({ theme, onScanNavigate }) {
                   </div>
                   <Row label="Formula" val={<code style={{ fontSize: 11, color: isDark ? '#7dd3fc' : '#1e40af', lineHeight: 1.6 }}>{item.formula}</code>} />
                   <Row label="Means" val={
-                    item.col === 'QUADRANT' ? (
+                    item.col === 'QUADRANT' || item.col === 'Quadrant' ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                         {item.means.map(({ q, desc }) => (
                           <div key={q} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
